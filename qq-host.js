@@ -1,22 +1,24 @@
-// Test-only miniapp host.
-// Production QQ route should use the generated bundle from:
-// 1. button.js
-// 2. qq-host.js
-// 3. scripts/patch-qq-miniapp.cjs
 (function () {
-  var G = typeof globalThis !== "undefined" ? globalThis : Function("return this")();
-  if (G.__qqFarmWsTest && G.__qqFarmWsTest.__installed) {
+  var root = typeof globalThis !== "undefined" ? globalThis : Function("return this")();
+  if (root.__qqFarmHost && root.__qqFarmHost.__installed) {
     return;
   }
 
-  var mini = G.wx || G.qq || null;
+  var mini = root.wx || root.qq || null;
+  var allowedPaths = __QQ_FARM_ALLOWED_RPC_PATHS__;
+  var allowedPathMap = {};
+  for (var i = 0; i < allowedPaths.length; i += 1) {
+    allowedPathMap[allowedPaths[i]] = true;
+  }
+
   var defaults = {
-    url: "ws://127.0.0.1:18788/miniapp",
+    url: "__QQ_FARM_HOST_WS_URL__",
     reconnectMs: 3000,
     heartbeatMs: 15000,
     callTimeoutMs: 15000,
     readyPollMs: 2000,
-    autoStart: true
+    autoStart: true,
+    expectedAppPlatform: "qq"
   };
 
   var state = {
@@ -24,14 +26,15 @@
     phase: "idle",
     seq: 0,
     socket: null,
-    transportKind: null,
+    socketKind: null,
     reconnectTimer: null,
     heartbeatTimer: null,
     readyPollTimer: null,
     manualStop: false,
     lastHelloAck: null,
     lastGameCtlReady: null,
-    clientId: "qq-miniapp-" + Math.random().toString(36).slice(2, 10)
+    lastError: null,
+    clientId: "qq-farm-" + Math.random().toString(36).slice(2, 10)
   };
 
   function now() {
@@ -43,22 +46,14 @@
     return prefix + "-" + state.seq;
   }
 
-  function safeConsole(level, message, extra) {
-    var text = "[qq-ws-test][" + level + "] " + message;
+  function logLocal(level, message, extra) {
+    var text = "[qq-host][" + level + "] " + message;
     try {
-      if (extra === undefined) console.log(text);
-      else console.log(text, extra);
-    } catch (_) {}
-  }
-
-  function showToast(message) {
-    if (!mini || typeof mini.showToast !== "function") return;
-    try {
-      mini.showToast({
-        title: String(message || "").slice(0, 7),
-        icon: "none",
-        duration: 1000
-      });
+      if (extra === undefined) {
+        console.log(text);
+      } else {
+        console.log(text, extra);
+      }
     } catch (_) {}
   }
 
@@ -67,15 +62,14 @@
   }
 
   function clearTimer(name) {
-    if (state[name]) {
-      clearTimeout(state[name]);
-      clearInterval(state[name]);
-      state[name] = null;
-    }
+    if (!state[name]) return;
+    clearTimeout(state[name]);
+    clearInterval(state[name]);
+    state[name] = null;
   }
 
   function getGameCtl() {
-    var ctl = G.gameCtl || (G.GameGlobal && G.GameGlobal.gameCtl);
+    var ctl = root.gameCtl || (root.GameGlobal && root.GameGlobal.gameCtl);
     return ctl && typeof ctl === "object" ? ctl : null;
   }
 
@@ -95,28 +89,49 @@
     if (info && typeof info.AppPlatform === "string" && info.AppPlatform) {
       return info.AppPlatform;
     }
-    if (G.qq) return "qq";
-    if (G.wx) return "wx";
+    if (root.qq) return "qq";
+    if (root.wx) return "wx";
     return "unknown";
+  }
+
+  function getScriptHash() {
+    var ctl = getGameCtl();
+    if (ctl && typeof ctl.__scriptHash === "string" && ctl.__scriptHash) {
+      return ctl.__scriptHash;
+    }
+    var meta = root.__qqFarmBundleMeta;
+    if (meta && typeof meta.scriptHash === "string" && meta.scriptHash) {
+      return meta.scriptHash;
+    }
+    return "__QQ_FARM_BUNDLE_HASH__";
+  }
+
+  function sanitizeSystemInfo(systemInfo) {
+    var info = systemInfo || getSystemInfo();
+    if (!info || typeof info !== "object") return null;
+    return {
+      brand: info.brand || null,
+      model: info.model || null,
+      platform: info.platform || null,
+      AppPlatform: info.AppPlatform || null,
+      windowWidth: info.windowWidth || null,
+      windowHeight: info.windowHeight || null,
+      pixelRatio: info.pixelRatio || null,
+      SDKVersion: info.SDKVersion || null,
+      MiniAppVersion: info.MiniAppVersion || null
+    };
   }
 
   function collectAvailableMethods() {
     var list = ["host.ping", "host.describe"];
     var ctl = getGameCtl();
     if (!ctl) return list;
-    var candidates = [
-      "getFarmOwnership",
-      "getFarmStatus",
-      "getFriendList",
-      "enterOwnFarm",
-      "enterFriendFarm",
-      "triggerOneClickOperation",
-      "autoPlant"
-    ];
-    for (var i = 0; i < candidates.length; i += 1) {
-      var key = candidates[i];
-      if (typeof ctl[key] === "function") {
-        list.push("gameCtl." + key);
+    for (var i = 0; i < allowedPaths.length; i += 1) {
+      var pathName = allowedPaths[i];
+      if (pathName.indexOf("gameCtl.") !== 0) continue;
+      var methodName = pathName.slice("gameCtl.".length);
+      if (typeof ctl[methodName] === "function") {
+        list.push(pathName);
       }
     }
     return list;
@@ -129,19 +144,26 @@
       clientId: state.clientId,
       url: state.url,
       phase: state.phase,
-      transportKind: state.transportKind,
+      socketKind: state.socketKind,
+      transportKind: state.socketKind,
       gameCtlReady: !!ctl,
       availableMethods: collectAvailableMethods(),
       lastHelloAck: state.lastHelloAck,
       appPlatform: getAppPlatform(systemInfo),
-      systemInfo: systemInfo,
-      scriptHash: ctl && typeof ctl.__scriptHash === "string" ? ctl.__scriptHash : null
+      systemInfo: sanitizeSystemInfo(systemInfo),
+      scriptHash: getScriptHash(),
+      hostVersion: "__QQ_FARM_HOST_VERSION__"
     };
   }
 
   function normalizeMessageData(raw) {
     if (typeof raw === "string") return raw;
     if (raw && typeof raw.data === "string") return raw.data;
+    if (raw && raw.data && typeof TextDecoder === "function" && raw.data instanceof ArrayBuffer) {
+      try {
+        return new TextDecoder("utf-8").decode(new Uint8Array(raw.data));
+      } catch (_) {}
+    }
     if (raw && raw.data && typeof ArrayBuffer !== "undefined" && raw.data instanceof ArrayBuffer) {
       try {
         return String.fromCharCode.apply(null, new Uint8Array(raw.data));
@@ -155,23 +177,23 @@
   }
 
   function sendPacket(packet) {
-    if (!state.socket || state.socket.readyState !== 1) {
-      return false;
-    }
+    if (!state.socket) return false;
     var text = JSON.stringify(packet);
     try {
-      if (state.transportKind === "websocket") {
-        state.socket.raw.send(text);
-      } else if (state.transportKind === "socketTask") {
-        state.socket.raw.send({ data: text });
-      } else {
-        return false;
+      if (state.socketKind === "websocket") {
+        if (state.socket.readyState !== 1) return false;
+        state.socket.send(text);
+        return true;
       }
-      return true;
+      if (state.socketKind === "socketTask") {
+        state.socket.send({ data: text });
+        return true;
+      }
     } catch (error) {
-      safeConsole("error", "send failed", String(error && error.message ? error.message : error));
-      return false;
+      state.lastError = error && error.message ? error.message : String(error);
+      logLocal("error", "send failed", state.lastError);
     }
+    return false;
   }
 
   function sendTyped(type, payload, id) {
@@ -184,7 +206,7 @@
   }
 
   function sendLog(level, message, extra) {
-    safeConsole(level, message, extra);
+    logLocal(level, message, extra);
     sendTyped("log", {
       level: level,
       message: message,
@@ -197,12 +219,14 @@
     return sendTyped("hello", {
       client: "qq-miniapp",
       app: "qq-farm",
-      version: "mvp-1",
+      version: "__QQ_FARM_HOST_VERSION__",
       gameCtlReady: !!getGameCtl(),
       availableMethods: collectAvailableMethods(),
-      transportKind: state.transportKind,
+      socketKind: state.socketKind,
+      transportKind: state.socketKind,
       appPlatform: getAppPlatform(systemInfo),
-      systemInfo: systemInfo
+      systemInfo: sanitizeSystemInfo(systemInfo),
+      scriptHash: getScriptHash()
     });
   }
 
@@ -214,7 +238,8 @@
     return sendTyped("event", {
       name: "gameCtlReadyChanged",
       ready: !!ready,
-      availableMethods: collectAvailableMethods()
+      availableMethods: collectAvailableMethods(),
+      scriptHash: getScriptHash()
     });
   }
 
@@ -242,11 +267,17 @@
   }
 
   function invokeAllowed(pathName, args) {
+    pathName = String(pathName || "");
+    if (!allowedPathMap[pathName]) {
+      throw new Error("call_path_not_allowed: " + pathName);
+    }
+
     if (pathName === "host.ping") {
       return {
         pong: true,
         now: new Date().toISOString(),
-        gameCtlReady: !!getGameCtl()
+        gameCtlReady: !!getGameCtl(),
+        phase: state.phase
       };
     }
     if (pathName === "host.describe") {
@@ -258,29 +289,11 @@
       throw new Error("gameCtl_not_ready");
     }
 
-    if (pathName === "gameCtl.getFarmOwnership") {
-      return ctl.getFarmOwnership.apply(ctl, Array.isArray(args) ? args : []);
+    var methodName = pathName.slice("gameCtl.".length);
+    if (!methodName || typeof ctl[methodName] !== "function") {
+      throw new Error("call_path_not_ready: " + pathName);
     }
-    if (pathName === "gameCtl.getFarmStatus") {
-      return ctl.getFarmStatus.apply(ctl, Array.isArray(args) ? args : []);
-    }
-    if (pathName === "gameCtl.getFriendList") {
-      return ctl.getFriendList.apply(ctl, Array.isArray(args) ? args : []);
-    }
-    if (pathName === "gameCtl.enterOwnFarm") {
-      return ctl.enterOwnFarm.apply(ctl, Array.isArray(args) ? args : []);
-    }
-    if (pathName === "gameCtl.enterFriendFarm") {
-      return ctl.enterFriendFarm.apply(ctl, Array.isArray(args) ? args : []);
-    }
-    if (pathName === "gameCtl.triggerOneClickOperation") {
-      return ctl.triggerOneClickOperation.apply(ctl, Array.isArray(args) ? args : []);
-    }
-    if (pathName === "gameCtl.autoPlant") {
-      return ctl.autoPlant.apply(ctl, Array.isArray(args) ? args : []);
-    }
-
-    throw new Error("call_path_not_allowed: " + pathName);
+    return ctl[methodName].apply(ctl, Array.isArray(args) ? args : []);
   }
 
   function sendResult(requestId, pathName, ok, data, error) {
@@ -296,13 +309,16 @@
     var payload = packet && packet.payload && typeof packet.payload === "object" ? packet.payload : {};
     var pathName = String(payload.path || "");
     var args = Array.isArray(payload.args) ? payload.args : [];
-    sendLog("info", "received call " + pathName);
 
     withTimeout(Promise.resolve().then(function () {
       return invokeAllowed(pathName, args);
     }), defaults.callTimeoutMs).then(function (result) {
       sendResult(packet.id, pathName, true, result, null);
     }, function (error) {
+      sendLog("warn", "call failed", {
+        path: pathName,
+        error: error && error.message ? error.message : String(error)
+      });
       sendResult(
         packet.id,
         pathName,
@@ -327,46 +343,41 @@
   function closeCurrentSocket() {
     if (!state.socket) return;
     try {
-      if (state.transportKind === "websocket") {
-        state.socket.raw.close();
-      } else if (state.transportKind === "socketTask") {
-        state.socket.raw.close({});
+      if (state.socketKind === "websocket" && typeof state.socket.close === "function") {
+        state.socket.close();
+      } else if (state.socketKind === "socketTask" && typeof state.socket.close === "function") {
+        state.socket.close({});
       }
     } catch (_) {}
     state.socket = null;
-    state.transportKind = null;
+    state.socketKind = null;
   }
 
   function handleOpen(kind, rawSocket) {
     clearTimer("reconnectTimer");
-    state.socket = {
-      raw: rawSocket,
-      readyState: 1
-    };
-    state.transportKind = kind;
+    state.socket = rawSocket;
+    state.socketKind = kind;
+    state.lastError = null;
     setPhase("connected");
-    showToast("ws ok");
     sendLog("info", "socket connected", { kind: kind, url: state.url });
     sendHello();
     startHeartbeat();
   }
 
   function handleClose(kind, detail) {
-    if (state.socket) {
-      state.socket.readyState = 3;
-    }
     setPhase("disconnected");
     stopHeartbeat();
     state.socket = null;
-    state.transportKind = kind || state.transportKind;
+    state.socketKind = kind || state.socketKind;
     sendLog("warn", "socket closed", detail || null);
     scheduleReconnect("closed");
   }
 
   function handleError(kind, error) {
+    state.lastError = error && error.message ? error.message : String(error);
     sendLog("error", "socket error", {
       kind: kind,
-      error: String(error && error.message ? error.message : error)
+      error: state.lastError
     });
   }
 
@@ -391,17 +402,16 @@
       handleCall(packet);
       return;
     }
-    sendLog("info", "received packet", packet);
   }
 
   function openWithWebSocket(url) {
-    if (typeof G.WebSocket !== "function") {
+    if (typeof root.WebSocket !== "function") {
       return false;
     }
 
     var ws;
     try {
-      ws = new G.WebSocket(url);
+      ws = new root.WebSocket(url);
     } catch (error) {
       handleError("websocket", error);
       return false;
@@ -414,7 +424,7 @@
       try {
         handleIncoming(parsePacket(event.data));
       } catch (error) {
-        sendLog("error", "invalid packet", String(error && error.message ? error.message : error));
+        handleError("websocket", error);
       }
     };
     ws.onerror = function (error) {
@@ -454,7 +464,7 @@
       try {
         handleIncoming(parsePacket(event));
       } catch (error) {
-        sendLog("error", "invalid packet", String(error && error.message ? error.message : error));
+        handleError("socketTask", error);
       }
     });
     task.onError(function (error) {
@@ -466,10 +476,24 @@
     return true;
   }
 
-  function connect(url) {
+  function canStartOnCurrentPlatform(force) {
+    if (force) return true;
+    if (!defaults.expectedAppPlatform) return true;
+    var platform = getAppPlatform();
+    if (!platform || platform === "unknown") return true;
+    return platform === defaults.expectedAppPlatform;
+  }
+
+  function connect(url, force) {
     if (url) {
       state.url = String(url);
     }
+    if (!canStartOnCurrentPlatform(!!force)) {
+      setPhase("platform_mismatch");
+      logLocal("warn", "skip start on platform", getAppPlatform());
+      return false;
+    }
+
     closeCurrentSocket();
     setPhase("connecting");
 
@@ -519,25 +543,62 @@
     clearTimer("readyPollTimer");
     closeCurrentSocket();
     setPhase("stopped");
-    safeConsole("info", "stopped");
+    logLocal("info", "stopped");
   }
 
-  function start(url) {
+  function start(url, opts) {
+    opts = opts && typeof opts === "object" ? opts : {};
     state.manualStop = false;
+    if (opts.url) {
+      state.url = String(opts.url);
+    } else if (url) {
+      state.url = String(url);
+    }
     if (!state.readyPollTimer) {
       startReadyPoll();
     }
-    return connect(url || state.url);
+    return connect(state.url, !!opts.force);
   }
 
-  G.__qqFarmWsTest = {
+  function configure(next) {
+    if (!next || typeof next !== "object") return getStatus();
+    if (next.url) {
+      state.url = String(next.url);
+    }
+    if (next.reconnectMs != null) {
+      defaults.reconnectMs = Math.max(500, Number(next.reconnectMs) || defaults.reconnectMs);
+    }
+    if (next.heartbeatMs != null) {
+      defaults.heartbeatMs = Math.max(1000, Number(next.heartbeatMs) || defaults.heartbeatMs);
+    }
+    if (next.callTimeoutMs != null) {
+      defaults.callTimeoutMs = Math.max(1000, Number(next.callTimeoutMs) || defaults.callTimeoutMs);
+    }
+    if (next.readyPollMs != null) {
+      defaults.readyPollMs = Math.max(300, Number(next.readyPollMs) || defaults.readyPollMs);
+      if (state.readyPollTimer) {
+        startReadyPoll();
+      }
+    }
+    if (typeof next.expectedAppPlatform === "string") {
+      defaults.expectedAppPlatform = next.expectedAppPlatform || null;
+    }
+    return getStatus();
+  }
+
+  root.__qqFarmHost = {
     __installed: true,
+    __hostVersion: "__QQ_FARM_HOST_VERSION__",
+    __bundleHash: "__QQ_FARM_BUNDLE_HASH__",
     defaults: defaults,
     start: start,
     stop: stop,
+    connect: connect,
+    configure: configure,
     status: getStatus,
     sendHello: sendHello,
-    invokeLocal: invokeAllowed
+    invokeLocal: invokeAllowed,
+    logLocal: logLocal
   };
 
   startReadyPoll();
