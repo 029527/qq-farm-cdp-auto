@@ -886,6 +886,16 @@
             </label>
           </div>
 
+          <label class="field-block" style="margin-bottom:12px">
+            <span>空地自动种植</span>
+            <select id="autoPlantMode">
+              <option value="none">不种植</option>
+              <option value="backpack_first">使用背包已有种子</option>
+              <option value="buy_highest">购买等级最高的种子</option>
+              <option value="buy_lowest">购买等级最低的种子</option>
+            </select>
+          </label>
+
           <div class="input-grid">
             <label class="field-block">
               <span>自己间隔(秒)</span>
@@ -988,6 +998,7 @@
       const autoEnterWaitMs = document.getElementById("autoEnterWaitMs");
       const autoActionWaitMs = document.getElementById("autoActionWaitMs");
       const autoStopOnError = document.getElementById("autoStopOnError");
+      const autoPlantMode = document.getElementById("autoPlantMode");
 
       let ws = null;
       let reqId = 0;
@@ -1221,6 +1232,7 @@
         autoEnterWaitMs.value = cfg.autoFarmEnterWaitMs != null ? cfg.autoFarmEnterWaitMs : 1800;
         autoActionWaitMs.value = cfg.autoFarmActionWaitMs != null ? cfg.autoFarmActionWaitMs : 1200;
         autoStopOnError.checked = !!cfg.autoFarmStopOnError;
+        autoPlantMode.value = cfg.autoFarmPlantMode || "none";
       }
 
       function gatherAutoFarmConfig() {
@@ -1235,6 +1247,7 @@
           autoFarmEnterWaitMs: Number(autoEnterWaitMs.value || 1800),
           autoFarmActionWaitMs: Number(autoActionWaitMs.value || 1200),
           autoFarmStopOnError: !!autoStopOnError.checked,
+          autoFarmPlantMode: autoPlantMode.value || "none",
         };
       }
 
@@ -1336,6 +1349,20 @@
                 lines.push(ts + "自己农场 " + label + "：失败 " + (a.error || ""));
               }
             });
+          }
+
+          // 自动种植
+          var pr = own && own.plantResult;
+          if (pr) {
+            if (pr.ok && pr.action === 'planted') {
+              lines.push(ts + "自动种植：" + (pr.seedName || pr.seedId) + " x" + (pr.emptyCount || 0) + " (" + (pr.seedSource || pr.mode) + ")");
+            } else if (pr.ok && pr.action === 'no_empty_lands') {
+              lines.push(ts + "自动种植：无空地");
+            } else if (pr.ok && pr.action === 'skip') {
+              // 不显示
+            } else if (!pr.ok) {
+              lines.push(ts + "自动种植：失败 " + (pr.reason || pr.error || ""));
+            }
           }
 
           // 好友农场

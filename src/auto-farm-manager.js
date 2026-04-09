@@ -246,6 +246,7 @@ class AutoFarmManager {
       const cycleOpts = {
         ownFarmEnabled: due.ownDue,
         friendStealEnabled: due.friendDue,
+        autoPlantMode: this.config.autoFarmPlantMode || "none",
         enterWaitMs: this.config.autoFarmEnterWaitMs,
         actionWaitMs: this.config.autoFarmActionWaitMs,
         maxFriends: this.config.autoFarmMaxFriends,
