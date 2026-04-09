@@ -23,13 +23,13 @@ npm install
 微信路线：
 
 ```bash
-npm run start -- --wx
+npm run start:wx
 ```
 
 QQ 路线：
 
 ```bash
-npm run start -- --qq
+npm run start:qq
 ```
 
 启动后打开控制页：
@@ -84,85 +84,10 @@ npm run start -- --qq
 - `frida` 安装慢、编译慢、卡住，多半是本机环境问题，不是本项目逻辑问题
 - 支持的微信版本可看 [`wmpf/frida/config`](wmpf/frida/config)
 
-## 启动方式
-
-统一推荐只记一个命令：
-
-```bash
-npm run start --runtime cdp
-```
-
-```bash
-npm run start --runtime qq_ws
-```
-
-简写：
-
-```bash
-npm run start --wx
-```
-
-```bash
-npm run start --qq
-```
-
-也可以只启动网关：
-
-```bash
-npm run gateway --wx
-```
-
-```bash
-npm run gateway --qq
-```
-
 ## 环境变量
 
-项目会自动读取：
+正常情况无需设置环境变量 使用对应命令启动即可 AI代码有点杂乱 后续会优化
 
-- `.env`
-- `.env.local`
-
-也支持额外文件：
-
-```bash
-FARM_ENV_FILE=.env.qq
-```
-
-参考模板见 [`.env.example`](.env.example)。
-
-### 常用变量
-
-| 变量 | 说明 |
-|------|------|
-| `FARM_RUNTIME_TARGET` | `cdp` / `qq_ws` / `auto` |
-| `FARM_GATEWAY_HOST` | 网关监听地址 |
-| `FARM_GATEWAY_PORT` | 网关端口 |
-| `FARM_CDP_WS` | 微信 CDP 目标 |
-| `FARM_QQ_WS_PATH` | QQ 宿主 WebSocket 路径，默认 `/miniapp` |
-| `FARM_QQ_GAME_JS` | QQ 小程序 `game.js` 路径，用于一键打补丁 |
-| `FARM_QQ_APPID` | QQ 小程序 appid；未设置 `FARM_QQ_GAME_JS` 时按它自动定位最新版本目录 |
-| `FARM_QQ_MINIAPP_SRC_ROOT` | QQ `miniapp_src` 根目录；默认 `%APPDATA%\\QQEX\\miniapp\\temps\\miniapp_src` |
-| `FARM_QQ_HOST_WS_URL` | 生成 QQ bundle 时写入的本地宿主地址 |
-| `FARM_QQ_HOST_VERSION` | QQ 宿主版本号 |
-| `FARM_QQ_BUNDLE_OUT` | 命令行生成 bundle 的输出路径 |
-
-### QQ 路线示例
-
-```env
-FARM_RUNTIME_TARGET=qq_ws
-FARM_GATEWAY_HOST=127.0.0.1
-FARM_GATEWAY_PORT=18788
-FARM_QQ_WS_PATH=/miniapp
-FARM_QQ_WS_READY_TIMEOUT_MS=15000
-FARM_QQ_WS_CALL_TIMEOUT_MS=15000
-# 显式路径优先；不填时按 appid 自动扫描最新目录
-# FARM_QQ_GAME_JS=D:\path\to\qq-miniapp\game.js
-FARM_QQ_APPID=1112386029
-# FARM_QQ_MINIAPP_SRC_ROOT=C:\Users\RJ\AppData\Roaming\QQEX\miniapp\temps\miniapp_src
-FARM_QQ_HOST_WS_URL=ws://127.0.0.1:18788/miniapp
-FARM_QQ_HOST_VERSION=qq-host-1
-```
 
 ## 控制页说明
 
@@ -179,7 +104,7 @@ FARM_QQ_HOST_VERSION=qq-host-1
   - 显示 QQ 宿主最近日志
   - 支持填写 `appid` 自动查找最新 QQ 小程序 `game.js`
   - 可直接“保存 QQ Bundle”
-  - 若已配置 `FARM_QQ_GAME_JS` 或 `FARM_QQ_APPID`，可直接“一键打补丁”
+  - 新版qqnt，可直接“一键打补丁”
 - `画面预览`
   - 仅 CDP 路线可用
   - 仅支持点击
@@ -210,11 +135,10 @@ FARM_QQ_HOST_VERSION=qq-host-1
 
 前提：
 
-- 已配置 `FARM_QQ_GAME_JS`
-- 或已配置 `FARM_QQ_APPID`
-- 或在控制页里临时填写 `appid`
+- 你是新版qqnt
+- 或已配置 `FARM_QQ_GAME_JS`
 
-1. `npm run start -- --qq`
+1. `npm run start:qq`
 2. 打开控制页
 3. 进入“运行时”页签
 4. 若未配置默认值，先填写 `QQ 小程序 AppID`
@@ -242,15 +166,9 @@ npm run qq:bundle
 npm run qq:patch
 ```
 
-也可以临时指定 appid：
-
-```bash
-npm run qq:patch -- --qq-appid 1112386029
-```
-
 ## 微信路线使用方式
 
-1. `npm run start -- --wx`
+1. `npm run start:wx`
 2. 打开目标小游戏
 3. 打开控制页
 4. 等待上下文就绪
@@ -259,7 +177,7 @@ npm run qq:patch -- --qq-appid 1112386029
 说明：
 
 - 微信路线下，画面预览、点击、拖动都走 CDP
-- 若出现 `CDP timeout`，一般先检查小游戏是否真的在前台、调试链路是否还活着
+- 若出现 `CDP timeout`，一般先检查启动顺序 必须先运行脚本 再打开/重进小程序  并且关闭小程序后需重新运行脚本
 
 ## 已实现功能
 
@@ -269,7 +187,7 @@ npm run qq:patch -- --qq-appid 1112386029
 - QQ `game.js` 一键打补丁
 - QQ `appid -> 最新版本目录 -> game.js` 自动发现
 - 自动农场调度：
-  - 自己农场一键收获 / 浇水 / 除草 / 杀虫
+  - 自己农场一键收获 / 浇水 / 除草 / 杀虫 / 种植
   - 好友列表刷新、进入好友农场、一键偷菜
   - 自动回家
   - 自动种植

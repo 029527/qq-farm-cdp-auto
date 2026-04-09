@@ -11,7 +11,11 @@
   },
   "scripts": {
     "start": "node run.cjs",
+    "start:qq": "node run.cjs --qq",
+    "start:wx": "node run.cjs --wx",
     "start:auto": "node run.cjs --auto-farm",
+    "start:qq:auto": "node run.cjs --qq --auto-farm",
+    "start:wx:auto": "node run.cjs --wx --auto-farm",
     "gateway": "node src/index.js",
     "qq:bundle": "node scripts/patch-qq-miniapp.cjs --bundle-only",
     "qq:patch": "node scripts/patch-qq-miniapp.cjs",

@@ -67,6 +67,10 @@ import {
     autoActionWaitMs,
     autoStopOnError,
     autoPlantMode,
+    autoPlantSource,
+    autoPlantSelectedWrap,
+    autoPlantSelectedSeed,
+    txtAutoPlantSeedState,
     friendMetricTotal,
     friendMetricCollectable,
     friendMetricWater,
@@ -79,6 +83,7 @@ import {
     btnAutoStart,
     btnAutoStop,
     btnAutoRefresh,
+    btnAutoPlantRefreshSeeds,
     btnRuntimeRefresh,
     btnPreviewRefresh,
     btnSaveQqBundle,
@@ -94,6 +99,8 @@ import {
   let farmConfig = {};
   let friendListCache = [];
   let autoFarmState = null;
+  let autoPlantSeedCatalog = null;
+  let pendingAutoPlantSelectedSeedKey = "";
   let previewState = null;
   let lastPreviewFrameMeta = null;
   let previewPointer = null;
@@ -526,10 +533,31 @@ import {
     autoEnterWaitMs.value = cfg.autoFarmEnterWaitMs != null ? cfg.autoFarmEnterWaitMs : 1800;
     autoActionWaitMs.value = cfg.autoFarmActionWaitMs != null ? cfg.autoFarmActionWaitMs : 1200;
     autoStopOnError.checked = !!cfg.autoFarmStopOnError;
-    autoPlantMode.value = cfg.autoFarmPlantMode || "none";
+    autoPlantMode.value = normalizeAutoPlantModeValue(cfg.autoFarmPlantMode);
+    autoPlantSource.value = normalizeAutoPlantSourceValue(cfg.autoFarmPlantSource, cfg.autoFarmPlantMode);
+    pendingAutoPlantSelectedSeedKey = normalizeText(
+      cfg.autoFarmPlantSelectedSeedKey
+        || cfg.autoFarmPlantSelectedSeed
+        || cfg.autoFarmPlantSelectedSeedId
+        || cfg.autoFarmPlantSelectedItemId
+        || cfg.autoFarmPlantSeedId
+        || cfg.autoFarmPlantItemId
+        || cfg.autoFarmPlantSeedName,
+    );
+    if (autoPlantMode.value === "selected") {
+      var selectedSeedMeta = parseAutoPlantSeedKey(pendingAutoPlantSelectedSeedKey);
+      if (selectedSeedMeta && selectedSeedMeta.source) {
+        autoPlantSource.value = selectedSeedMeta.source;
+      }
+    }
+    if (autoPlantSeedCatalog) {
+      renderAutoPlantSelectedSeedOptions(autoPlantSeedCatalog);
+    }
+    syncAutoPlantControls();
   }
 
   function gatherAutoFarmConfig() {
+    const selectedSeedKey = normalizeText(autoPlantSelectedSeed.value || pendingAutoPlantSelectedSeedKey);
     return {
       autoFarmOwnEnabled: !!autoOwnEnabled.checked,
       autoFarmFriendEnabled: !!autoFriendEnabled.checked,
@@ -541,8 +569,199 @@ import {
       autoFarmEnterWaitMs: Number(autoEnterWaitMs.value || 1800),
       autoFarmActionWaitMs: Number(autoActionWaitMs.value || 1200),
       autoFarmStopOnError: !!autoStopOnError.checked,
-      autoFarmPlantMode: autoPlantMode.value || "none",
+      autoFarmPlantMode: normalizeAutoPlantModeValue(autoPlantMode.value || "none"),
+      autoFarmPlantSource: normalizeAutoPlantSourceValue(autoPlantSource.value || "auto", autoPlantMode.value),
+      autoFarmPlantSelectedSeedKey: selectedSeedKey,
     };
+  }
+
+  function normalizeAutoPlantModeValue(value) {
+    const raw = normalizeText(value);
+    if (!raw) return "none";
+    if (raw === "backpack_first") return "highest";
+    if (raw === "buy_highest") return "highest";
+    if (raw === "buy_lowest") return "lowest";
+    if (raw === "specific") return "selected";
+    if (raw === "highest" || raw === "lowest" || raw === "selected" || raw === "none") return raw;
+    return "none";
+  }
+
+  function normalizeAutoPlantSourceValue(value, legacyMode) {
+    const raw = normalizeText(value).toLowerCase();
+    if (raw === "auto" || raw === "backpack" || raw === "shop") return raw;
+    if (legacyMode === "backpack_first") return "backpack";
+    if (legacyMode === "buy_highest" || legacyMode === "buy_lowest") return "shop";
+    return "auto";
+  }
+
+  function parseAutoPlantSeedKey(value) {
+    const raw = normalizeText(value);
+    const match = raw.match(/^(backpack|shop):(.*)$/i);
+    if (!match) return null;
+    return {
+      source: String(match[1]).toLowerCase(),
+      id: normalizeText(match[2]),
+    };
+  }
+
+  function formatAutoPlantModeLabel(mode) {
+    if (mode === "highest") return "优先最高级";
+    if (mode === "lowest") return "优先最低级";
+    if (mode === "selected") return "指定种子";
+    return "不种植";
+  }
+
+  function formatAutoPlantSourceLabel(source) {
+    if (source === "backpack") return "背包";
+    if (source === "shop") return "商店";
+    return "自动";
+  }
+
+  function formatAutoPlantCatalogTime(value) {
+    return value ? formatDateTime(value) : "";
+  }
+
+  function buildAutoPlantSeedOptionLabel(item) {
+    if (!item || typeof item !== "object") return "";
+    const parts = [];
+    parts.push("[" + formatAutoPlantSourceLabel(item.source) + "]");
+    parts.push(item.name || item.key || "未知种子");
+    if (item.source === "backpack") {
+      parts.push("x" + (Number(item.count) || 0));
+    }
+    if (item.level != null) {
+      parts.push("Lv" + (Number(item.level) || 0));
+    }
+    if (item.source === "shop" && item.price != null) {
+      parts.push("价格 " + (Number(item.price) || 0));
+    }
+    return parts.join(" · ");
+  }
+
+  function renderAutoPlantSelectedSeedOptions(catalog) {
+    if (!autoPlantSelectedSeed) return;
+    const currentValue = normalizeText(autoPlantSelectedSeed.value || pendingAutoPlantSelectedSeedKey);
+    autoPlantSelectedSeed.innerHTML = "";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = catalog && catalog.counts && catalog.counts.all > 0
+      ? "请选择种子"
+      : "暂无可用种子";
+    autoPlantSelectedSeed.appendChild(placeholder);
+
+    function appendGroup(label, items) {
+      if (!Array.isArray(items) || items.length === 0) return;
+      const group = document.createElement("optgroup");
+      group.label = label;
+      items.forEach(function (item) {
+        const option = document.createElement("option");
+        option.value = item.key;
+        option.textContent = buildAutoPlantSeedOptionLabel(item);
+        group.appendChild(option);
+      });
+      autoPlantSelectedSeed.appendChild(group);
+    }
+
+    appendGroup("背包种子", catalog && catalog.backpack);
+    appendGroup("商店种子", catalog && catalog.shop);
+
+    if (currentValue) {
+      autoPlantSelectedSeed.value = currentValue;
+      if (autoPlantSelectedSeed.value !== currentValue) {
+        const fallback = document.createElement("option");
+        fallback.value = currentValue;
+        fallback.textContent = "当前配置: " + currentValue;
+        autoPlantSelectedSeed.appendChild(fallback);
+        autoPlantSelectedSeed.value = currentValue;
+      }
+    }
+  }
+
+  function renderAutoPlantSeedCatalogState(catalog, errorText) {
+    if (!txtAutoPlantSeedState) return;
+    if (errorText) {
+      txtAutoPlantSeedState.className = "summary-note error";
+      txtAutoPlantSeedState.textContent = "种子目录加载失败: " + errorText;
+      return;
+    }
+    if (!catalog) {
+      txtAutoPlantSeedState.className = "summary-note";
+      txtAutoPlantSeedState.textContent = "尚未读取种子目录";
+      return;
+    }
+
+    const parts = [
+      "背包 " + ((catalog.counts && catalog.counts.backpack) || 0) + " 种",
+      "商店 " + ((catalog.counts && catalog.counts.shop) || 0) + " 种",
+    ];
+    if (catalog.runtimeTarget) {
+      parts.push("路线 " + formatRuntimeTargetLabel(catalog.runtimeTarget));
+    }
+    if (catalog.fetchedAt) {
+      parts.push("更新 " + formatAutoPlantCatalogTime(catalog.fetchedAt));
+    }
+    const errors = catalog.errors || {};
+    const errorParts = [];
+    if (errors.backpack) errorParts.push("背包: " + errors.backpack);
+    if (errors.shop) errorParts.push("商店: " + errors.shop);
+
+    txtAutoPlantSeedState.className = "summary-note" + (errorParts.length ? " error" : " success");
+    txtAutoPlantSeedState.textContent = errorParts.length
+      ? parts.join(" · ") + " · " + errorParts.join("；")
+      : parts.join(" · ");
+  }
+
+  function syncAutoPlantControls() {
+    const mode = normalizeAutoPlantModeValue(autoPlantMode.value);
+    const selectedMode = mode === "selected";
+    if (autoPlantSelectedWrap) {
+      autoPlantSelectedWrap.style.display = selectedMode ? "" : "none";
+    }
+    autoPlantSource.disabled = mode === "none";
+    autoPlantSelectedSeed.disabled = !selectedMode;
+    if (selectedMode && normalizeText(autoPlantSelectedSeed.value || pendingAutoPlantSelectedSeedKey) && !autoPlantSeedCatalog) {
+      loadAutoPlantSeedCatalog(true);
+    }
+  }
+
+  function loadAutoPlantSeedCatalog(silent) {
+    if (btnAutoPlantRefreshSeeds) {
+      btnAutoPlantRefreshSeeds.disabled = true;
+      btnAutoPlantRefreshSeeds.textContent = "刷新中...";
+    }
+    return fetch("/api/auto-farm/seeds")
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.ok && j.data) {
+          autoPlantSeedCatalog = j.data;
+          renderAutoPlantSelectedSeedOptions(autoPlantSeedCatalog);
+          renderAutoPlantSeedCatalogState(autoPlantSeedCatalog, "");
+          syncAutoPlantControls();
+        } else {
+          autoPlantSeedCatalog = null;
+          renderAutoPlantSelectedSeedOptions(null);
+          renderAutoPlantSeedCatalogState(null, (j && j.error) || "未知错误");
+          if (!silent) {
+            appendLine("种子目录加载失败", j);
+          }
+        }
+        return j;
+      })
+      .catch(function (e) {
+        autoPlantSeedCatalog = null;
+        renderAutoPlantSelectedSeedOptions(null);
+        renderAutoPlantSeedCatalogState(null, String(e));
+        if (!silent) {
+          appendLine("种子目录加载失败", String(e));
+        }
+      })
+      .finally(function () {
+        if (btnAutoPlantRefreshSeeds) {
+          btnAutoPlantRefreshSeeds.disabled = false;
+          btnAutoPlantRefreshSeeds.textContent = "刷新种子目录";
+        }
+      });
   }
 
   function formatFarmTypeLabel(farmType) {
@@ -558,6 +777,124 @@ import {
     if (key === "eraseGrass") return "一键除草";
     if (key === "killBug") return "一键杀虫";
     return key ? String(key) : "未知动作";
+  }
+
+  function formatAutoPlantReason(reason) {
+    const map = {
+      not_own_farm: "当前不在自己农场",
+      selected_seed_required: "未选择指定种子",
+      selected_seed_not_found: "未找到指定种子",
+      selected_seed_not_found_in_backpack: "背包中未找到指定种子",
+      selected_seed_not_found_in_shop: "商店中未找到指定种子",
+      no_seeds_in_backpack: "背包没有可用种子",
+      no_seeds_in_shop: "商店没有可用种子",
+      no_seed_available: "没有可用种子",
+      no_seed_resolved: "没有解析出可种植种子",
+      buy_failed: "购买失败",
+      shop_data_error: "商店数据读取失败",
+      seed_catalog_error: "种子目录读取失败",
+      seed_resolution_failed_in_backpack: "背包选种失败",
+      shop_seed_goods_id_missing: "商店种子缺少 goodsId",
+      seed_not_found: "未找到该种子",
+      seed_count_empty: "种子数量不足",
+      land_not_found: "目标地块不存在",
+      land_not_empty: "目标地块不是空地",
+      multi_land_seed_requires_multi_land_request: "该作物需要多地块种植",
+      multi_land_ids_insufficient: "多地块种植所需空地不足",
+      multi_land_target_not_empty: "多地块目标里存在非空地",
+      plant_timeout: "种植后等待状态更新超时",
+      timeout: "操作超时",
+      planted: "已种下",
+    };
+    return map[reason] || (reason ? String(reason) : "未知错误");
+  }
+
+  function formatAutoPlantCatalogErrors(errors) {
+    const src = errors && typeof errors === "object" ? errors : {};
+    const parts = [];
+    if (src.backpack) parts.push("背包: " + src.backpack);
+    if (src.shop) parts.push("商店: " + src.shop);
+    return parts.join("；");
+  }
+
+  function collectAutoPlantFailureSamples(pr) {
+    const plant = pr && pr.plantResult ? pr.plantResult : null;
+    const results = Array.isArray(plant && plant.results) ? plant.results : [];
+    return results
+      .filter(function (item) { return !!(item && !item.ok); })
+      .slice(0, 5)
+      .map(function (item) {
+        const reason = item.reason || (item.verify && item.verify.reason) || item.error || "";
+        return {
+          landId: item.landId != null
+            ? item.landId
+            : (Array.isArray(item.landIds) && item.landIds.length > 0 ? item.landIds.join(",") : null),
+          reason: formatAutoPlantReason(reason),
+          rawReason: reason || null,
+          beforeStage: item.before && item.before.stageKind ? item.before.stageKind : null,
+          afterStage: item.after && item.after.stageKind ? item.after.stageKind : null,
+        };
+      });
+  }
+
+  function buildAutoPlantDiagnosticPayload(pr) {
+    const plant = pr && pr.plantResult ? pr.plantResult : null;
+    const reason = pr && (pr.reason || (plant && plant.reason) || (pr.buyResult && pr.buyResult.reason) || pr.error || "");
+    return {
+      ok: !!(pr && pr.ok),
+      mode: pr && pr.mode ? formatAutoPlantModeLabel(pr.mode) : null,
+      source: pr && (pr.seedSource || pr.source) ? formatAutoPlantSourceLabel(pr.seedSource || pr.source) : null,
+      emptyCount: pr && pr.emptyCount != null ? pr.emptyCount : null,
+      seedName: pr && (pr.seedName || (pr.targetSeed && pr.targetSeed.name) || null),
+      seedId: pr && pr.seedId != null ? pr.seedId : (pr && pr.targetSeed ? (pr.targetSeed.seedId ?? pr.targetSeed.itemId ?? null) : null),
+      selectedSeedKey: pr && pr.selectedSeedKey ? pr.selectedSeedKey : null,
+      reason: reason || null,
+      reasonText: reason ? formatAutoPlantReason(reason) : null,
+      catalogCounts: pr && pr.catalogCounts ? pr.catalogCounts : null,
+      catalogErrors: pr && pr.catalogErrors ? pr.catalogErrors : null,
+      buy: pr && pr.buyResult ? {
+        ok: !!pr.buyResult.ok,
+        reason: pr.buyResult.reason || null,
+        reasonText: pr.buyResult.reason ? formatAutoPlantReason(pr.buyResult.reason) : null,
+        count: pr.buyResult.count != null ? pr.buyResult.count : null,
+        itemId: pr.buyResult.itemId != null ? pr.buyResult.itemId : null,
+      } : null,
+      plant: plant ? {
+        ok: !!plant.ok,
+        action: plant.action || null,
+        reason: plant.reason || null,
+        reasonText: plant.reason ? formatAutoPlantReason(plant.reason) : null,
+        plantedCount: plant.plantedCount != null ? plant.plantedCount : null,
+        failedCount: plant.failedCount != null ? plant.failedCount : null,
+        requestedLandIds: plant.requestedLandIds || plant.landIds || null,
+        attemptedLandIds: plant.attemptedLandIds || null,
+        skippedLandIds: plant.skippedLandIds || null,
+      } : null,
+    };
+  }
+
+  function appendAutoPlantActionDiagnostics(action, state) {
+    if (action !== "runOnce" || !state) return;
+    const result = state.lastResult && state.lastResult.result ? state.lastResult.result : null;
+    const own = result && result.ownFarm ? result.ownFarm : null;
+    const pr = own && own.plantResult ? own.plantResult : null;
+    if (!pr) return;
+
+    appendLine("自动种植诊断", buildAutoPlantDiagnosticPayload(pr));
+
+    const catalogErrorText = formatAutoPlantCatalogErrors(pr.catalogErrors);
+    if (catalogErrorText) {
+      appendLine("自动种植目录错误", catalogErrorText);
+    }
+
+    if (pr.buyResult && !pr.buyResult.ok) {
+      appendLine("自动种植购买失败", pr.buyResult);
+    }
+
+    const failures = collectAutoPlantFailureSamples(pr);
+    if (failures.length > 0) {
+      appendLine("自动种植失败地块", failures);
+    }
   }
 
   function formatStageCounts(stageCounts) {
@@ -648,14 +985,58 @@ import {
       // 自动种植
       var pr = own && own.plantResult;
       if (pr) {
-        if (pr.ok && pr.action === 'planted') {
-          lines.push(ts + "自动种植：" + (pr.seedName || pr.seedId) + " x" + (pr.emptyCount || 0) + " (" + (pr.seedSource || pr.mode) + ")");
-        } else if (pr.ok && pr.action === 'no_empty_lands') {
+        if (pr.ok && pr.action === "no_empty_lands") {
           lines.push(ts + "自动种植：无空地");
-        } else if (pr.ok && pr.action === 'skip') {
+        } else if (pr.ok && pr.action === "skip") {
           // 不显示
+        } else if (pr.ok) {
+          var plant = pr.plantResult || {};
+          var plantedCount = plant.plantedCount != null ? plant.plantedCount : (pr.emptyCount || 0);
+          var failedCount = plant.failedCount != null ? plant.failedCount : 0;
+          var seedLabel = pr.seedName || pr.seedId || "未知种子";
+          var detailParts = [
+            seedLabel,
+            "模式 " + formatAutoPlantModeLabel(pr.mode),
+            "来源 " + formatAutoPlantSourceLabel(pr.seedSource || pr.source),
+            "空地 " + (pr.emptyCount || 0),
+            "成功 " + plantedCount,
+          ];
+          if (failedCount > 0) {
+            detailParts.push("失败 " + failedCount);
+          }
+          if (pr.buyResult && pr.buyResult.ok) {
+            detailParts.push("已购买 " + (pr.buyResult.count || pr.emptyCount || 0));
+          }
+          lines.push(ts + "自动种植：" + detailParts.join(" · "));
+          var successCatalogErrors = formatAutoPlantCatalogErrors(pr.catalogErrors);
+          if (successCatalogErrors) {
+            lines.push(ts + "自动种植目录：" + successCatalogErrors);
+          }
+          var successFailures = collectAutoPlantFailureSamples(pr);
+          if (successFailures.length > 0) {
+            lines.push(ts + "自动种植失败地块：" + successFailures.map(function (item) {
+              return (item.landId != null ? ("地块" + item.landId) : "未知地块") + " " + item.reason;
+            }).join("；"));
+          }
         } else if (!pr.ok) {
-          lines.push(ts + "自动种植：失败 " + (pr.reason || pr.error || ""));
+          var failure = formatAutoPlantReason(pr.reason || (pr.plantResult && pr.plantResult.reason) || pr.error || "");
+          lines.push(ts + "自动种植：失败 " + failure);
+          if (pr.seedName || (pr.targetSeed && pr.targetSeed.name)) {
+            lines.push(ts + "自动种植目标：" + (pr.seedName || (pr.targetSeed && pr.targetSeed.name)));
+          }
+          var failureCatalogErrors = formatAutoPlantCatalogErrors(pr.catalogErrors);
+          if (failureCatalogErrors) {
+            lines.push(ts + "自动种植目录：" + failureCatalogErrors);
+          }
+          if (pr.buyResult && !pr.buyResult.ok) {
+            lines.push(ts + "自动种植购买：失败 " + formatAutoPlantReason(pr.buyResult.reason || "timeout"));
+          }
+          var failureSamples = collectAutoPlantFailureSamples(pr);
+          if (failureSamples.length > 0) {
+            lines.push(ts + "自动种植失败地块：" + failureSamples.map(function (item) {
+              return (item.landId != null ? ("地块" + item.landId) : "未知地块") + " " + item.reason;
+            }).join("；"));
+          }
         }
       }
 
@@ -1020,6 +1401,7 @@ import {
           }
           renderAutoFarmState(j.data, true);
           appendLine("自动化操作完成: " + action, j.data);
+          appendAutoPlantActionDiagnostics(action, j.data);
         } else {
           appendLine("自动化操作失败: " + action, j);
         }
@@ -1668,6 +2050,31 @@ import {
     loadAutoFarmState(false);
   };
 
+  btnAutoPlantRefreshSeeds.onclick = function () {
+    loadAutoPlantSeedCatalog(false);
+  };
+
+  autoPlantMode.onchange = function () {
+    syncAutoPlantControls();
+    if (normalizeAutoPlantModeValue(autoPlantMode.value) === "selected") {
+      loadAutoPlantSeedCatalog(true);
+    }
+  };
+
+  autoPlantSource.onchange = function () {
+    autoPlantSource.value = normalizeAutoPlantSourceValue(autoPlantSource.value, autoPlantMode.value);
+    syncAutoPlantControls();
+  };
+
+  autoPlantSelectedSeed.onchange = function () {
+    pendingAutoPlantSelectedSeedKey = normalizeText(autoPlantSelectedSeed.value);
+    const parsed = parseAutoPlantSeedKey(pendingAutoPlantSelectedSeedKey);
+    if (parsed && parsed.source) {
+      autoPlantSource.value = parsed.source;
+    }
+    syncAutoPlantControls();
+  };
+
   btnRuntimeRefresh.onclick = function () {
     fetchHealth();
     findQqGameTarget({ silent: true, force: true }).catch(function () {});
@@ -1807,6 +2214,9 @@ import {
   renderRuntimePanel(null);
   renderPreviewCapability(null);
   renderInjectStatus();
+  renderAutoPlantSelectedSeedOptions(null);
+  renderAutoPlantSeedCatalogState(null, "");
+  syncAutoPlantControls();
   if (getQqAppIdValue()) {
     findQqGameTarget({ silent: true }).catch(function () {});
   }
@@ -1815,5 +2225,6 @@ import {
   setInterval(fetchHealth, HEALTH_POLL_MS);
   loadFarmConfig();
   loadAutoFarmState(true);
+  loadAutoPlantSeedCatalog(true);
   setInterval(function () { loadAutoFarmState(false); }, AUTO_FARM_POLL_MS);
 })();

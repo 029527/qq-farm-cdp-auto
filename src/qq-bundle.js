@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { QQ_RPC_ALLOWED_PATHS } = require("./qq-rpc-spec");
+const { QQ_RPC_HOST_METHODS } = require("./qq-rpc-spec");
 const { findLatestQqMiniappByAppId } = require("./qq-miniapp-discovery");
 
 const MARKER_START = "// >>> QQ_FARM_AUTOMATION START >>>";
@@ -147,7 +147,7 @@ function buildQqBundle(options = {}) {
   const hashSeed = JSON.stringify({
     hostVersion,
     hostWsUrl,
-    allowedPaths: QQ_RPC_ALLOWED_PATHS,
+    hostMethods: QQ_RPC_HOST_METHODS,
     buttonSha1: sha1Hex(buttonSource),
     hostTemplateSha1: sha1Hex(hostTemplate),
   });
@@ -155,7 +155,7 @@ function buildQqBundle(options = {}) {
   const generatedAt = new Date().toISOString();
 
   const hostSource = renderHostSource(hostTemplate, {
-    "__QQ_FARM_ALLOWED_RPC_PATHS__": JSON.stringify(QQ_RPC_ALLOWED_PATHS, null, 2),
+    "__QQ_FARM_HOST_RPC_PATHS__": JSON.stringify(QQ_RPC_HOST_METHODS, null, 2),
     "__QQ_FARM_HOST_WS_URL__": escapeDoubleQuotedString(hostWsUrl),
     "__QQ_FARM_HOST_VERSION__": escapeDoubleQuotedString(hostVersion),
     "__QQ_FARM_BUNDLE_HASH__": scriptHash,

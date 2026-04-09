@@ -12,16 +12,15 @@ const QQ_RPC_GAME_CTL_METHODS = Object.freeze([
   "enterOwnFarm",
   "enterFriendFarm",
   "triggerOneClickOperation",
+  "getSeedList",
+  "getShopSeedList",
+  "buyShopGoods",
+  "plantSingleLand",
+  "plantSeedsOnLands",
   "autoPlant",
 ]);
 
-const QQ_RPC_ALLOWED_PATHS = Object.freeze([
-  ...QQ_RPC_HOST_METHODS,
-  ...QQ_RPC_GAME_CTL_METHODS.map((name) => "gameCtl." + name),
-]);
-
 module.exports = {
-  QQ_RPC_ALLOWED_PATHS,
   QQ_RPC_GAME_CTL_METHODS,
   QQ_RPC_HOST_METHODS,
 };

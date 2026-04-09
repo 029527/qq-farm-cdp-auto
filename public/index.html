@@ -266,11 +266,34 @@
             <span>空地自动种植</span>
             <select id="autoPlantMode">
               <option value="none">不种植</option>
-              <option value="backpack_first">使用背包已有种子</option>
-              <option value="buy_highest">购买等级最高的种子</option>
-              <option value="buy_lowest">购买等级最低的种子</option>
+              <option value="highest">优先最高级</option>
+              <option value="lowest">优先最低级</option>
+              <option value="selected">指定种子</option>
             </select>
           </label>
+
+          <div class="input-grid compact">
+            <label class="field-block">
+              <span>种子来源</span>
+              <select id="autoPlantSource">
+                <option value="auto">自动判断</option>
+                <option value="backpack">只用背包</option>
+                <option value="shop">只用商店</option>
+              </select>
+            </label>
+            <label class="field-block" id="autoPlantSelectedWrap">
+              <span>指定种子</span>
+              <select id="autoPlantSelectedSeed">
+                <option value="">请先刷新种子目录</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="action-row" style="margin-top:12px">
+            <button type="button" class="ghost" id="btnAutoPlantRefreshSeeds">刷新种子目录</button>
+          </div>
+
+          <div class="summary-note" id="txtAutoPlantSeedState">尚未读取种子目录</div>
 
           <div class="input-grid">
             <label class="field-block">

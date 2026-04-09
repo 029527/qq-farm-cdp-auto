@@ -2,6 +2,11 @@
 
 const { ensureGameCtl, callGameCtl } = require("./game-ctl-utils");
 const { runAutoFarmCycle } = require("./auto-farm-executor");
+const {
+  normalizeAutoPlantMode,
+  normalizeAutoPlantSource,
+  readAutoPlantSelectedSeedKey,
+} = require("./auto-farm-plant-config");
 
 function toBool(value, defaultValue) {
   if (value == null) return defaultValue;
@@ -22,6 +27,8 @@ function toInt(value, defaultValue, min, max) {
 
 function normalizeAutoFarmConfig(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
+  const autoFarmPlantMode = normalizeAutoPlantMode(src.autoFarmPlantMode);
+  const autoFarmPlantSource = normalizeAutoPlantSource(src.autoFarmPlantSource, src.autoFarmPlantMode);
   return {
     autoFarmOwnEnabled: toBool(src.autoFarmOwnEnabled, true),
     autoFarmFriendEnabled: toBool(src.autoFarmFriendEnabled, false),
@@ -33,6 +40,9 @@ function normalizeAutoFarmConfig(raw) {
     autoFarmRefreshFriendList: toBool(src.autoFarmRefreshFriendList, true),
     autoFarmReturnHome: toBool(src.autoFarmReturnHome, true),
     autoFarmStopOnError: toBool(src.autoFarmStopOnError, false),
+    autoFarmPlantMode,
+    autoFarmPlantSource,
+    autoFarmPlantSelectedSeedKey: readAutoPlantSelectedSeedKey(src),
   };
 }
 
@@ -236,7 +246,11 @@ class AutoFarmManager {
       "enterOwnFarm",
       "enterFriendFarm",
       "triggerOneClickOperation",
-      "autoPlant",
+      "getSeedList",
+      "getShopSeedList",
+      "buyShopGoods",
+      "plantSingleLand",
+      "plantSeedsOnLands",
     ]);
   }
 
@@ -264,6 +278,8 @@ class AutoFarmManager {
         ownFarmEnabled: due.ownDue,
         friendStealEnabled: due.friendDue,
         autoPlantMode: this.config.autoFarmPlantMode || "none",
+        autoPlantSource: this.config.autoFarmPlantSource || "auto",
+        autoPlantSelectedSeedKey: this.config.autoFarmPlantSelectedSeedKey || "",
         enterWaitMs: this.config.autoFarmEnterWaitMs,
         actionWaitMs: this.config.autoFarmActionWaitMs,
         maxFriends: this.config.autoFarmMaxFriends,

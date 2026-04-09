@@ -16,6 +16,7 @@ const fs = require("node:fs/promises");
 const { CdpSession } = require("./cdp-session");
 const { WmpfCdpSession } = require("./cdp-wmpf-session");
 const { AutoFarmManager } = require("./auto-farm-manager");
+const { getAutoPlantSeedCatalog } = require("./auto-farm-executor");
 const { PreviewManager } = require("./preview-manager");
 const { QqWsSession } = require("./qq-ws-session");
 const { ensureGameCtl, callGameCtl } = require("./game-ctl-utils");
@@ -42,6 +43,9 @@ const FARM_CONFIG_DEFAULT = {
   autoFarmRefreshFriendList: true,
   autoFarmReturnHome: true,
   autoFarmStopOnError: false,
+  autoFarmPlantMode: "none",
+  autoFarmPlantSource: "auto",
+  autoFarmPlantSelectedSeedKey: "",
 };
 
 function farmConfigPath() {
@@ -961,6 +965,33 @@ function createGateway(config) {
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
         res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && urlPath === "/api/auto-farm/seeds") {
+      try {
+        const session = await ensureAutomationSession();
+        await ensureAutomationGameCtl(session);
+        const catalog = await getAutoPlantSeedCatalog(session, callAutomationGameCtl, {
+          includeBackpack: true,
+          includeShop: true,
+          availableOnly: true,
+          ensureShopData: true,
+          closeOverlayAfterEnsure: true,
+        });
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          data: {
+            ...catalog,
+            runtimeTarget: resolveAutomationRuntimeTarget(),
+          },
+        }));
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: false, error: err.message }));
       }
       return;

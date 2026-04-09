@@ -48,6 +48,7 @@ const parse_cli_options = () => {
             "auto-context-name": { type: "string" },
             help: { type: "boolean", short: "h" },
         },
+        strict: false,
         allowPositionals: false,
     });
     if (values.help) {

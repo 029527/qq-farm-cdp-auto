@@ -6,6 +6,11 @@
   const doc = (G.GameGlobal && G.GameGlobal.document) || G.document;
   const canvas = (cc.game && cc.game.canvas) || G.canvas || (G.GameGlobal && G.GameGlobal.canvas);
   let cachedSelfGid = null;
+  let cachedOops = null;
+  let cachedItemManager = null;
+  let cachedMessageBus = null;
+  let cachedProtobufRuntime = null;
+  let cachedNetWebSocketRuntime = null;
 
   function out(v) {
     try { console.dir(v); } catch (_) {}
@@ -29,6 +34,14 @@
 
   function scene() {
     return cc.director.getScene();
+  }
+
+  function getSceneRootOrNull() {
+    try {
+      return scene();
+    } catch (_) {
+      return null;
+    }
   }
 
   function walk(node, outArr) {
@@ -634,6 +647,322 @@
 
   function normalizeMatchText(value) {
     return normalizeText(value).replace(/\s+/g, '').toLowerCase();
+  }
+
+  function isOopsLike(value) {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return false;
+    return !!(
+      isItemManagerLike(value.itemM) &&
+      isNetWebSocketLike(value.netWebSocket)
+    );
+  }
+
+  function isItemManagerLike(value) {
+    return !!(value && typeof value === 'object' && typeof value.getAllSeeds === 'function');
+  }
+
+  function isMessageBusLike(value) {
+    return !!(
+      value &&
+      typeof value === 'object' &&
+      typeof value.dispatchEvent === 'function' &&
+      (
+        typeof value.on === 'function' ||
+        typeof value.addEventListener === 'function'
+      )
+    );
+  }
+
+  function isProtobufDefaultLike(value) {
+    return !!(value && (typeof value === 'object' || typeof value === 'function'));
+  }
+
+  function isNetWebSocketLike(value) {
+    return !!(
+      value &&
+      typeof value === 'object' &&
+      (
+        typeof value.sendMsg === 'function' ||
+        typeof value.send === 'function' ||
+        typeof value.request === 'function' ||
+        typeof value.connect === 'function'
+      )
+    );
+  }
+
+  function rememberOops(value) {
+    if (isOopsLike(value)) {
+      cachedOops = value;
+      return value;
+    }
+    return null;
+  }
+
+  function scoreLookupKey(key) {
+    const text = String(key || '');
+    let score = 0;
+    if (/oops/i.test(text)) score += 10;
+    if (/(global|data|farm|shop|item|seed|message)/i.test(text)) score += 5;
+    if (/(model|comp|manager|system|virtual)/i.test(text)) score += 2;
+    return score;
+  }
+
+  function sortLookupKeys(keys) {
+    return (Array.isArray(keys) ? keys.slice() : []).sort(function (a, b) {
+      const diff = scoreLookupKey(b) - scoreLookupKey(a);
+      if (diff !== 0) return diff;
+      return String(a).localeCompare(String(b));
+    });
+  }
+
+  function findObjectDeep(roots, predicate, opts) {
+    opts = opts || {};
+    const maxDepth = opts.maxDepth == null ? 4 : Math.max(1, Number(opts.maxDepth) || 1);
+    const maxNodes = opts.maxNodes == null ? 240 : Math.max(20, Number(opts.maxNodes) || 20);
+    const maxKeysPerNode = opts.maxKeysPerNode == null ? 48 : Math.max(8, Number(opts.maxKeysPerNode) || 8);
+    const seen = new Set();
+    const queue = (Array.isArray(roots) ? roots : [roots])
+      .filter(Boolean)
+      .map(function (item, index) {
+        if (item && typeof item === 'object' && item.value !== undefined) return item;
+        return {
+          value: item,
+          path: 'root[' + index + ']',
+          depth: 0
+        };
+      });
+    let inspected = 0;
+
+    while (queue.length > 0 && inspected < maxNodes) {
+      const current = queue.shift();
+      const value = current && current.value;
+      if (!value || (typeof value !== 'object' && typeof value !== 'function') || seen.has(value)) continue;
+      seen.add(value);
+      inspected += 1;
+
+      let matched = false;
+      try {
+        matched = !!predicate(value, current);
+      } catch (_) {
+        matched = false;
+      }
+      if (matched) return current;
+
+      if (current.depth >= maxDepth) continue;
+
+      let keys = [];
+      try {
+        keys = sortLookupKeys(Object.keys(value)).slice(0, maxKeysPerNode);
+      } catch (_) {
+        keys = [];
+      }
+
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        let child = null;
+        try {
+          child = value[key];
+        } catch (_) {
+          child = null;
+        }
+        if (!child || (typeof child !== 'object' && typeof child !== 'function') || seen.has(child)) continue;
+        queue.push({
+          value: child,
+          path: (current.path || 'root') + '.' + key,
+          depth: current.depth + 1,
+          parent: current
+        });
+      }
+    }
+
+    return null;
+  }
+
+  function iterateSystemContainer(container, visitor) {
+    if (!container) return false;
+
+    try {
+      if (typeof container.forEach === 'function') {
+        let stopped = false;
+        container.forEach(function (value, key) {
+          if (stopped) return;
+          if (visitor(value, key) === true) {
+            stopped = true;
+          }
+        });
+        return stopped;
+      }
+    } catch (_) {}
+
+    try {
+      if (typeof container.entries === 'function') {
+        const entries = container.entries();
+        if (entries && typeof entries[Symbol.iterator] === 'function') {
+          for (const pair of entries) {
+            if (!pair || pair.length < 2) continue;
+            if (visitor(pair[1], pair[0]) === true) return true;
+          }
+          return false;
+        }
+      }
+    } catch (_) {}
+
+    if (Array.isArray(container)) {
+      for (let i = 0; i < container.length; i++) {
+        if (visitor(container[i], i) === true) return true;
+      }
+      return false;
+    }
+
+    let keys = [];
+    try {
+      keys = sortLookupKeys(Object.keys(container));
+    } catch (_) {
+      keys = [];
+    }
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (visitor(container[key], key) === true) return true;
+    }
+    return false;
+  }
+
+  function findSystemObjectDeep(predicate, opts) {
+    opts = opts || {};
+    const maxModules = opts.maxModules == null ? 260 : Math.max(20, Number(opts.maxModules) || 20);
+    const systems = [
+      G.System,
+      G.SystemJS,
+      G.__system__,
+      G.GameGlobal && G.GameGlobal.System,
+      G.GameGlobal && G.GameGlobal.SystemJS
+    ].filter(Boolean);
+    let inspected = 0;
+    let found = null;
+
+    for (let s = 0; s < systems.length; s++) {
+      const sys = systems[s];
+      const containers = [
+        { name: 'registry', value: sys.registry },
+        { name: 'modules', value: sys._loader && sys._loader.modules },
+        { name: 'moduleRecords', value: sys._loader && sys._loader.moduleRecords }
+      ];
+
+      for (let c = 0; c < containers.length; c++) {
+        const container = containers[c];
+        const stopped = iterateSystemContainer(container.value, function (raw, key) {
+          if (inspected >= maxModules || found) return true;
+          inspected += 1;
+          const match = findObjectDeep([{
+            value: raw,
+            path: 'System.' + container.name + '[' + String(key) + ']',
+            depth: 0
+          }], predicate, opts);
+          if (match) {
+            found = {
+              moduleId: key,
+              path: match.path,
+              value: match.value
+            };
+            return true;
+          }
+          return false;
+        });
+        if (stopped || found) return found;
+      }
+    }
+
+    return found;
+  }
+
+  function resolveRuntimeCapability(cacheName, directCandidates, predicate, opts) {
+    const cacheMap = {
+      itemManager: cachedItemManager,
+      messageBus: cachedMessageBus,
+      protobufDefault: cachedProtobufRuntime,
+      netWebSocket: cachedNetWebSocketRuntime
+    };
+    const assignCache = function (value) {
+      if (!predicate(value)) return null;
+      if (cacheName === 'itemManager') cachedItemManager = value;
+      if (cacheName === 'messageBus') cachedMessageBus = value;
+      if (cacheName === 'protobufDefault') cachedProtobufRuntime = value;
+      if (cacheName === 'netWebSocket') cachedNetWebSocketRuntime = value;
+      return value;
+    };
+
+    if (assignCache(cacheMap[cacheName])) return cacheMap[cacheName];
+
+    const candidates = Array.isArray(directCandidates) ? directCandidates : [directCandidates];
+    for (let i = 0; i < candidates.length; i++) {
+      if (assignCache(candidates[i])) return candidates[i];
+    }
+
+    const roots = [
+      { value: cachedOops, path: 'cachedOops', depth: 0 },
+      { value: G.oops, path: 'globalThis.oops', depth: 0 },
+      { value: G.GameGlobal && G.GameGlobal.oops, path: 'GameGlobal.oops', depth: 0 },
+      { value: getSceneRootOrNull(), path: 'scene()', depth: 0 },
+      { value: cc && cc.game, path: 'cc.game', depth: 0 },
+      { value: cc && cc.director, path: 'cc.director', depth: 0 },
+      { value: G.GameGlobal, path: 'GameGlobal', depth: 0 },
+      { value: G, path: 'globalThis', depth: 0 }
+    ].filter(function (item) {
+      return !!item.value;
+    });
+
+    const globalMatch = findObjectDeep(roots, function (value) {
+      if (predicate(value)) return true;
+      if (value && typeof value === 'object') {
+        if (predicate(value.itemM)) return true;
+        if (predicate(value.message)) return true;
+        if (predicate(value.protobufDefault)) return true;
+        if (predicate(value.netWebSocket)) return true;
+      }
+      return false;
+    }, {
+      maxDepth: opts && opts.maxDepth != null ? opts.maxDepth : 4,
+      maxNodes: opts && opts.maxNodes != null ? opts.maxNodes : 280,
+      maxKeysPerNode: opts && opts.maxKeysPerNode != null ? opts.maxKeysPerNode : 48
+    });
+    if (globalMatch) {
+      const value = globalMatch.value;
+      if (assignCache(value)) return value;
+      if (value && typeof value === 'object') {
+        if (assignCache(value.itemM)) return value.itemM;
+        if (assignCache(value.message)) return value.message;
+        if (assignCache(value.protobufDefault)) return value.protobufDefault;
+        if (assignCache(value.netWebSocket)) return value.netWebSocket;
+      }
+    }
+
+    const systemMatch = findSystemObjectDeep(function (value) {
+      if (predicate(value)) return true;
+      if (value && typeof value === 'object') {
+        if (predicate(value.itemM)) return true;
+        if (predicate(value.message)) return true;
+        if (predicate(value.protobufDefault)) return true;
+        if (predicate(value.netWebSocket)) return true;
+      }
+      return false;
+    }, {
+      maxDepth: opts && opts.systemMaxDepth != null ? opts.systemMaxDepth : 3,
+      maxNodes: opts && opts.systemMaxNodes != null ? opts.systemMaxNodes : 72,
+      maxKeysPerNode: opts && opts.systemMaxKeysPerNode != null ? opts.systemMaxKeysPerNode : 24,
+      maxModules: opts && opts.maxModules != null ? opts.maxModules : 220
+    });
+    if (systemMatch) {
+      const value = systemMatch.value;
+      if (assignCache(value)) return value;
+      if (value && typeof value === 'object') {
+        if (assignCache(value.itemM)) return value.itemM;
+        if (assignCache(value.message)) return value.message;
+        if (assignCache(value.protobufDefault)) return value.protobufDefault;
+        if (assignCache(value.netWebSocket)) return value.netWebSocket;
+      }
+    }
+
+    return null;
   }
 
   function unwrapModuleNamespace(mod) {
@@ -2852,43 +3181,108 @@
 
   // ─── 种植相关 ───
 
+  function getSystemExportRuntime(moduleIds, exportName) {
+    const resolved = findSystemModuleExport(moduleIds, exportName);
+    if (!resolved || resolved.value == null) return null;
+    return {
+      source: 'System:' + resolved.moduleId,
+      moduleId: resolved.moduleId,
+      exportName: exportName,
+      value: resolved.value,
+      namespace: resolved.namespace || null
+    };
+  }
+
   function resolveOops() {
-    const resolved = findSystemModuleExport(
+    if (rememberOops(cachedOops)) return cachedOops;
+
+    const resolved = getSystemExportRuntime(
       ['chunks:///_virtual/Oops.ts', './Oops.ts'],
       'oops'
     );
-    if (resolved && resolved.value) return resolved.value;
+    if (resolved && rememberOops(resolved.value)) return cachedOops;
 
-    const resolved2 = findSystemModuleExport(
-      ['chunks:///_virtual/GlobalData.ts', './GlobalData.ts'],
-      'oops'
-    );
-    if (resolved2 && resolved2.value) return resolved2.value;
+    const directCandidates = [
+      G.oops,
+      G.GameGlobal && G.GameGlobal.oops
+    ];
+    for (let i = 0; i < directCandidates.length; i++) {
+      if (rememberOops(directCandidates[i])) return cachedOops;
+    }
+
     return null;
   }
 
   function getItemManager() {
     const oops = resolveOops();
-    if (oops && oops.itemM) return oops.itemM;
-    throw new Error('oops.itemM not found');
+    if (oops && isItemManagerLike(oops.itemM)) {
+      cachedItemManager = oops.itemM;
+      return cachedItemManager;
+    }
+    if (isItemManagerLike(cachedItemManager)) return cachedItemManager;
+    if (isItemManagerLike(G.itemM)) {
+      cachedItemManager = G.itemM;
+      return cachedItemManager;
+    }
+    if (G.GameGlobal && isItemManagerLike(G.GameGlobal.itemM)) {
+      cachedItemManager = G.GameGlobal.itemM;
+      return cachedItemManager;
+    }
+    throw new Error(oops ? 'oops.itemM not found' : 'oops not found');
   }
 
   function getOopsMessage() {
     const oops = resolveOops();
-    if (oops && oops.message) return oops.message;
-    throw new Error('oops.message not found');
+    if (oops && isMessageBusLike(oops.message)) {
+      cachedMessageBus = oops.message;
+      return cachedMessageBus;
+    }
+    if (isMessageBusLike(cachedMessageBus)) return cachedMessageBus;
+    if (isMessageBusLike(G.message)) {
+      cachedMessageBus = G.message;
+      return cachedMessageBus;
+    }
+    if (G.GameGlobal && isMessageBusLike(G.GameGlobal.message)) {
+      cachedMessageBus = G.GameGlobal.message;
+      return cachedMessageBus;
+    }
+    throw new Error(oops ? 'oops.message not found' : 'oops not found');
   }
 
   function getProtobufDefault() {
     const oops = resolveOops();
-    if (oops && oops.protobufDefault) return oops.protobufDefault;
-    throw new Error('oops.protobufDefault not found');
+    if (oops && isProtobufDefaultLike(oops.protobufDefault)) {
+      cachedProtobufRuntime = oops.protobufDefault;
+      return cachedProtobufRuntime;
+    }
+    if (isProtobufDefaultLike(cachedProtobufRuntime)) return cachedProtobufRuntime;
+    if (isProtobufDefaultLike(G.protobufDefault)) {
+      cachedProtobufRuntime = G.protobufDefault;
+      return cachedProtobufRuntime;
+    }
+    if (G.GameGlobal && isProtobufDefaultLike(G.GameGlobal.protobufDefault)) {
+      cachedProtobufRuntime = G.GameGlobal.protobufDefault;
+      return cachedProtobufRuntime;
+    }
+    throw new Error(oops ? 'oops.protobufDefault not found' : 'oops not found');
   }
 
   function getNetWebSocket() {
     const oops = resolveOops();
-    if (oops && oops.netWebSocket) return oops.netWebSocket;
-    throw new Error('oops.netWebSocket not found');
+    if (oops && isNetWebSocketLike(oops.netWebSocket)) {
+      cachedNetWebSocketRuntime = oops.netWebSocket;
+      return cachedNetWebSocketRuntime;
+    }
+    if (isNetWebSocketLike(cachedNetWebSocketRuntime)) return cachedNetWebSocketRuntime;
+    if (isNetWebSocketLike(G.netWebSocket)) {
+      cachedNetWebSocketRuntime = G.netWebSocket;
+      return cachedNetWebSocketRuntime;
+    }
+    if (G.GameGlobal && isNetWebSocketLike(G.GameGlobal.netWebSocket)) {
+      cachedNetWebSocketRuntime = G.GameGlobal.netWebSocket;
+      return cachedNetWebSocketRuntime;
+    }
+    throw new Error(oops ? 'oops.netWebSocket not found' : 'oops not found');
   }
 
   /**
@@ -2976,18 +3370,193 @@
     return opts.silent ? list : out(list);
   }
 
+  function getSingletonModuleComp() {
+    const resolved = getSystemExportRuntime(
+      ['chunks:///_virtual/SingletonModuleComp.ts', './SingletonModuleComp.ts'],
+      'smc'
+    );
+    if (resolved && resolved.value && typeof resolved.value === 'object') {
+      return resolved.value;
+    }
+
+    const directCandidates = [
+      G.smc,
+      G.GameGlobal && G.GameGlobal.smc
+    ];
+    for (let i = 0; i < directCandidates.length; i++) {
+      const smc = directCandidates[i];
+      if (smc && typeof smc === 'object') return smc;
+    }
+
+    throw new Error('smc not found');
+  }
+
+  function getShopModuleRuntime() {
+    const resolved = getSystemExportRuntime(
+      ['chunks:///_virtual/Shop.ts', './Shop.ts'],
+      'Shop'
+    );
+    if (resolved && resolved.value && typeof resolved.value.staticEnter === 'function') {
+      return {
+        source: resolved.source,
+        Shop: resolved.value
+      };
+    }
+
+    const directCandidates = [
+      G.Shop,
+      G.GameGlobal && G.GameGlobal.Shop
+    ];
+    for (let i = 0; i < directCandidates.length; i++) {
+      const Shop = directCandidates[i];
+      if (Shop && typeof Shop.staticEnter === 'function') {
+        return {
+          source: i === 0 ? 'globalThis.Shop' : 'GameGlobal.Shop',
+          Shop: Shop
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function ensureShopEntityReady() {
+    const smc = getSingletonModuleComp();
+    if (smc.shop && smc.shop.ShopModelComp) {
+      return {
+        smc: smc,
+        shop: smc.shop,
+        model: smc.shop.ShopModelComp,
+        strategy: 'existing'
+      };
+    }
+
+    const runtime = getShopModuleRuntime();
+    if (!runtime || !runtime.Shop || typeof runtime.Shop.staticEnter !== 'function') {
+      throw new Error('Shop.staticEnter not found');
+    }
+
+    runtime.Shop.staticEnter();
+
+    if (!smc.shop) {
+      throw new Error('smc.shop not found after Shop.staticEnter');
+    }
+    if (!smc.shop.ShopModelComp) {
+      throw new Error('smc.shop.ShopModelComp not found after Shop.staticEnter');
+    }
+
+    return {
+      smc: smc,
+      shop: smc.shop,
+      model: smc.shop.ShopModelComp,
+      strategy: 'shop_static_enter'
+    };
+  }
+
+  function findShopGoodsSource(opts) {
+    opts = opts || {};
+    const smc = getSingletonModuleComp();
+    const shop = smc.shop;
+    if (!shop || typeof shop !== 'object') {
+      throw new Error('smc.shop not found');
+    }
+    const model = shop.ShopModelComp;
+    if (!model || typeof model !== 'object') {
+      throw new Error('smc.shop.ShopModelComp not found');
+    }
+
+    const list = Array.isArray(model.curGoodsList) ? model.curGoodsList : null;
+    if (opts.requireList !== false && !list) {
+      throw new Error('smc.shop.ShopModelComp.curGoodsList not ready');
+    }
+
+    return {
+      path: 'smc.shop.ShopModelComp.curGoodsList',
+      smc: smc,
+      shop: shop,
+      model: model,
+      list: list
+    };
+  }
+
+  async function waitForShopGoodsSource(opts) {
+    opts = opts || {};
+    const timeoutMs = opts.timeoutMs == null ? 1600 : Math.max(0, Number(opts.timeoutMs) || 0);
+    const pollMs = opts.pollMs == null ? 120 : Math.max(30, Number(opts.pollMs) || 30);
+    const startedAt = Date.now();
+    let lastError = null;
+
+    while (true) {
+      try {
+        return findShopGoodsSource(opts);
+      } catch (error) {
+        lastError = error;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        if (lastError) throw lastError;
+        throw new Error(
+          opts.requireList === false
+            ? 'smc.shop.ShopModelComp not found'
+            : 'smc.shop.ShopModelComp.curGoodsList not ready'
+        );
+      }
+      await wait(pollMs);
+    }
+  }
+
+  async function ensureShopGoodsSource(opts) {
+    opts = opts || {};
+    const shopId = opts.shopId || 2;
+    const ensureData = opts.ensureData !== false;
+
+    try {
+      const existing = findShopGoodsSource({
+        ...opts,
+        requireList: ensureData
+      });
+      return {
+        source: existing,
+        strategy: ensureData ? 'existing_data' : 'existing_entity',
+        openedByUi: false,
+        buttonPath: null
+      };
+    } catch (_) {}
+
+    const entity = ensureShopEntityReady();
+    if (!ensureData) {
+      const source = findShopGoodsSource({ requireList: false });
+      return {
+        source: source,
+        strategy: entity.strategy,
+        openedByUi: false,
+        buttonPath: null
+      };
+    }
+
+    await requestShopData(shopId);
+
+    const ready = await waitForShopGoodsSource({
+      ...opts,
+      requireList: true,
+      timeoutMs: opts.requestTimeoutMs == null ? 1500 : opts.requestTimeoutMs
+    });
+    return {
+      source: ready,
+      strategy: entity.strategy + '_request_shop_data',
+      openedByUi: false,
+      buttonPath: null
+    };
+  }
+
   /**
    * 获取商店种子商品列表
    * 需要先请求商店数据（shop_id=2 是种子商店）
    */
   function readShopSeedList(opts) {
     opts = opts || {};
-    const oops = resolveOops();
-    if (!oops) throw new Error('oops not found');
-    const farmEntity = oops.farm || (oops.ecs && oops.ecs.farm);
-    const shop = farmEntity && farmEntity.shop ? farmEntity.shop : (oops.shop || null);
-    if (!shop || !shop.ShopModelComp) throw new Error('ShopModelComp not found');
-    const allGoods = shop.ShopModelComp.curGoodsList;
+    const source = opts.shopSource || findShopGoodsSource(opts);
+    const allGoods = source && Array.isArray(source.list) ? source.list : null;
     if (!Array.isArray(allGoods)) return opts.silent ? [] : out([]);
     const seedGoods = allGoods.filter(function (g) {
       return g && g.isSeed && g.unlocked && !g.isBuyAll;
@@ -3026,16 +3595,28 @@
 
   async function getShopSeedList(opts) {
     opts = opts || {};
-    const ensureData = opts.ensureData !== false;
-    if (ensureData) {
-      await requestShopData(opts.shopId || 2);
-    }
+    const ready = await ensureShopGoodsSource({
+      ...opts,
+      ensureData: opts.ensureData !== false
+    });
     const list = readShopSeedList({
+      ...opts,
       silent: true,
-      sortByLevel: opts.sortByLevel !== false
+      sortByLevel: opts.sortByLevel !== false,
+      shopSource: ready.source
     }).filter(function (item) {
       return !opts.availableOnly || !item.isMultiLandPlant;
     });
+
+    if (ready.openedByUi && opts.closeOverlayAfterEnsure === true) {
+      try {
+        await dismissActiveOverlay({
+          silent: true,
+          waitAfter: opts.closeOverlayWaitMs == null ? 220 : opts.closeOverlayWaitMs
+        });
+      } catch (_) {}
+    }
+
     return opts.silent ? list : out(list);
   }
 
@@ -3044,6 +3625,7 @@
    */
   async function requestShopData(shopId) {
     shopId = shopId || 2;
+    ensureShopEntityReady();
     const message = getOopsMessage();
     return new Promise(function (resolve) {
       const handler = function () {
@@ -3064,6 +3646,7 @@
    * 购买商店商品
    */
   async function buyShopGoods(goodsId, num, price) {
+    ensureShopEntityReady();
     const message = getOopsMessage();
     return new Promise(function (resolve) {
       const handler = function (ev, itemId, count) {
@@ -3453,7 +4036,7 @@
       : Math.min(requestedLandIds.length, Math.max(0, seedInfo.count || 0));
     const attemptedLandIds = requestedLandIds.slice(0, maxAttempts);
     const skippedLandIds = requestedLandIds.slice(attemptedLandIds.length);
-    const intervalMs = opts.intervalMs == null ? 300 : Math.max(0, Number(opts.intervalMs) || 0);
+    const intervalMs = opts.intervalMs == null ? 100 : Math.max(0, Number(opts.intervalMs) || 0);
     const results = [];
 
     if (attemptedLandIds.length === 0) {
@@ -4450,6 +5033,7 @@
     triggerOneClickHarvest,
     getSeedList,
     getShopSeedList,
+    buyShopGoods,
     getSeedCatalog,
     plantSingleLand,
     plantSeedsOnLands,
@@ -4495,6 +5079,7 @@
       'gameCtl.triggerOneClickHarvest()',
       'gameCtl.getSeedList({ availableOnly: true })',
       'gameCtl.getShopSeedList({ ensureData: true })',
+      'gameCtl.buyShopGoods(goodsId, num, price)',
       'gameCtl.getSeedCatalog({ availableOnly: true })',
       'gameCtl.plantSingleLand(seedId, landId, opts)',
       'gameCtl.plantSeedsOnLands(seedId, landIds, opts)',
