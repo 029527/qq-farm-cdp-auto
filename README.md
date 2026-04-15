@@ -120,7 +120,7 @@ npm run start:qq
 
 适合不想记命令的人。
 
-1. `npm run start -- --qq`
+1. `npm run start:qq`
 2. 打开控制页
 3. 进入“运行时”页签
 4. 点击“保存 QQ Bundle”
@@ -131,7 +131,7 @@ npm run start:qq
 - 浏览器支持 `showSaveFilePicker` 时，会弹系统保存框
 - 不支持时，会走普通文件下载
 
-### 方式 2：网页一键打补丁
+### 方式 2：网页一键打补丁(推荐 傻瓜式)
 
 前提：
 
