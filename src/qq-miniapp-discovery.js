@@ -39,7 +39,23 @@ function normalizeQqAppId(rawAppId) {
   return appId;
 }
 
+// 支持 .env 中用 ~ 表示 home 目录，path.resolve() 不会自动展开
+function expandTilde(p) {
+  if (typeof p === "string" && (p === "~" || p.startsWith("~/") || p.startsWith("~\\"))) {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
+
 function getDefaultAppDataRoot() {
+  // macOS: QQ NT 的数据存在 App Container 内，而非 ~/Library/Application Support
+  if (process.platform === "darwin") {
+    return path.join(
+      os.homedir(),
+      "Library", "Containers", "com.tencent.qqexminiprogram",
+      "Data", "Library", "Application Support",
+    );
+  }
   return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
 }
 
@@ -93,7 +109,7 @@ function getDefaultQqMiniappPkgRoot(srcRoot) {
 function resolveQqMiniappRoots(options = {}) {
   const explicitSrcRoot = trimToString(options.srcRoot);
   const rootCandidates = explicitSrcRoot
-    ? dedupePaths([explicitSrcRoot])
+    ? dedupePaths([expandTilde(explicitSrcRoot)])
     : getDefaultQqMiniappSrcRootCandidates();
   const candidates = rootCandidates.map((srcRoot) => ({
     srcRoot: path.resolve(srcRoot),
