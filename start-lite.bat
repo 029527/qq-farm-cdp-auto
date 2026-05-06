@@ -5,11 +5,11 @@ chcp 65001 >nul
 set "PYTHONUTF8=1"
 set "NPM_CONFIG_UNICODE=true"
 
-title QQ Farm Auto - Quick Start
+title QQ Farm Auto - Lite Float Mode
 
 echo.
 echo ==========================================
-echo   QQ Farm Auto - Quick Start
+echo   QQ Farm Auto - Lite Float Mode
 echo ==========================================
 echo.
 
@@ -47,26 +47,33 @@ if errorlevel 2 (
     set "FARM_LAUNCH_TARGET_PLATFORM=windows"
 )
 
-echo.
-echo Select runtime:
-echo   [1] QQ     WebSocket host + QQ bundle
-echo   [2] WeChat CDP + auto inject button.js
+if not exist "node_modules" (
+    echo [INFO] node_modules not found. Installing dependencies...
+    set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
+    npm install
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Dependency installation failed.
+        pause
+        exit /b 1
+    )
+)
 
-choice /c 12 /n /m "Choose runtime [1/2]: "
-if errorlevel 2 (
-    set "RUNTIME_FLAG=--wx"
-    set "RUNTIME_NAME=WeChat"
-) else (
-    set "RUNTIME_FLAG=--qq"
-    set "RUNTIME_NAME=QQ"
+if not exist "node_modules\\electron" (
+    echo [INFO] Electron runtime not found. Installing dependencies...
+    set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
+    npm install
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Electron installation failed.
+        pause
+        exit /b 1
+    )
 )
 
 echo.
-echo Selected platform: %FARM_LAUNCH_TARGET_PLATFORM%
-echo Selected runtime: %RUNTIME_NAME%
-echo.
-
-node setup.cjs %RUNTIME_FLAG%
+echo [INFO] Launching lite floating window...
+call npm run desktop:sample
 if errorlevel 1 (
     echo.
     pause

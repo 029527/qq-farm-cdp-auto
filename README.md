@@ -41,16 +41,16 @@
 
 1. 安装 Node.js 22 或更高版本
 2. 把项目放到本地任意目录
-3. 双击运行 `start.bat`
-4. 按提示选择 `QQ` 或 `微信`
+3. Windows 双击运行 `start.bat`；macOS 可执行 `./start.sh`
+4. 按提示先选择目标平台，再选择 `QQ / 微信`
 5. 等浏览器自动打开控制页
 
-`start.bat` 会自动做这些事：
+启动脚本会自动做这些事：
 
 - 检查 Node.js 版本
-- 检查或安装依赖
 - 微信路线自动检测 `frida` 是否可用
 - 启动网关并自动打开控制页
+- 启动前询问目标平台，用于匹配 QQ 小程序默认路径
 
 默认控制页地址：
 
@@ -191,7 +191,9 @@ npm run qq:images
 | [`button.js`](button.js) | 游戏内能力层，对外暴露 `gameCtl.*` |
 | [`qq-host.js`](qq-host.js) | QQ 小程序内常驻宿主模板 |
 | [`run.cjs`](run.cjs) | 统一启动入口 |
-| [`start.bat`](start.bat) | Windows 一键启动入口 |
+| [`start.bat`](start.bat) | Windows 标准启动入口，启动前会询问平台与 `QQ / 微信` |
+| [`start.sh`](start.sh) | Shell 启动入口，启动前会询问平台与 `QQ / 微信` |
+| [`start-lite.bat`](start-lite.bat) | Windows Lite 悬浮窗启动入口，保留原始轻量启动方式 |
 
 ## 图片资源约定
 
@@ -211,10 +213,17 @@ npm run qq:images
 
 ## 环境要求
 
-- Windows
+- QQ 路线支持 Windows / macOS
+- 微信路线当前仍以 Windows 为前提
 - Node.js `>= 22`
 - QQ 路线需要能访问 QQ 小程序本地资源文件
 - 微信路线需要可用的微信 PC 调试环境
+
+补充说明：
+
+- macOS 支持当前主要覆盖 QQ 路线：QQ 小程序目录自动识别、`FARM_QQ_MINIAPP_SRC_ROOT=~/...` 路径展开、启动前平台选择对应的默认路径匹配
+- 微信路线依赖现有 `wmpf + frida + WeChatAppEx.exe` 调试链路，当前未声明支持 macOS
+- Lite 悬浮窗当前仍以 Windows Electron 桌面环境为前提；它保留原始轻量切换 `QQ / 微信` 的入口，不复用标准启动流程
 
 微信兼容版本可参考 [`wmpf/frida/config`](wmpf/frida/config)。
 

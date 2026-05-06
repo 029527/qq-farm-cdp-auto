@@ -15,6 +15,9 @@ data/friend-help-exp-cache.json
 data/message-push-state.json
 data/player-profile-cache.json
 data/task-events.ndjson
+data/desktop-sample-service.json
+data/desktop-sample-settings.json
+data/desktop-sample-account.json
 data/account-stats/
 .env
 .env.local

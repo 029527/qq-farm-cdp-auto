@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Farm Float Sample</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: rgba(14, 18, 25, 0.54);
+      --panel: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08));
+      --line: rgba(255, 255, 255, 0.12);
+      --line-strong: rgba(255, 255, 255, 0.22);
+      --text: rgba(247, 250, 255, 0.96);
+      --muted: rgba(201, 212, 226, 0.72);
+      --good: #6be6b5;
+      --warn: #ffd36b;
+      --bad: #ff8c8c;
+      --primary: rgba(255, 255, 255, 0.92);
+      --primary-text: #131721;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      --radius: 24px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: transparent;
+    }
+
+    body {
+      padding: 10px;
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at top left, rgba(111, 174, 255, 0.2), transparent 34%),
+        radial-gradient(circle at bottom right, rgba(107, 230, 181, 0.15), transparent 30%),
+        var(--bg);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px) saturate(140%);
+      -webkit-backdrop-filter: blur(24px) saturate(140%);
+      padding: 12px;
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+
+    .interactive {
+      -webkit-app-region: no-drag;
+    }
+
+    .titlebar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 168px auto;
+      align-items: start;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .title-copy h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .title-copy p {
+      margin: 2px 0 0;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.36);
+      box-shadow: 0 0 0 7px rgba(255, 255, 255, 0.05);
+      flex: 0 0 auto;
+    }
+
+    .dot.good {
+      background: var(--good);
+      box-shadow: 0 0 0 7px rgba(107, 230, 181, 0.12);
+    }
+
+    .dot.warn {
+      background: var(--warn);
+      box-shadow: 0 0 0 7px rgba(255, 211, 107, 0.1);
+    }
+
+    .dot.bad {
+      background: var(--bad);
+      box-shadow: 0 0 0 7px rgba(255, 140, 140, 0.1);
+    }
+
+    .account-pill {
+      min-width: 168px;
+      min-height: 56px;
+      padding: 7px 9px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-self: stretch;
+    }
+
+    .emoji-box {
+      width: 48px;
+      height: 48px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 28px;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .account-copy {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .account-name {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.94);
+      text-align: left;
+    }
+
+    .account-greet {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      text-align: left;
+    }
+
+    .title-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-self: end;
+    }
+
+    .ghost-btn,
+    .close-btn {
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .ghost-btn {
+      padding: 0 12px;
+      font-weight: 700;
+    }
+
+    .close-btn {
+      width: 28px;
+      font-size: 16px;
+    }
+
+    .ghost-btn:hover,
+    .close-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: var(--line-strong);
+    }
+
+    .section {
+      padding: 9px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .section-head strong {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .section-head span {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      margin-bottom: 7px;
+    }
+
+    .seg-btn {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 9px 12px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+    }
+
+    .seg-btn:hover:enabled {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+    }
+
+    .seg-btn.on {
+      background: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 255, 255, 0.28);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .primary {
+      width: 100%;
+      border: none;
+      border-radius: 16px;
+      padding: 11px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      background: var(--primary);
+      color: var(--primary-text);
+      cursor: pointer;
+      box-shadow: 0 12px 28px rgba(255, 255, 255, 0.14);
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+
+    .primary.alt {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: none;
+    }
+
+    .primary:hover:enabled {
+      transform: translateY(-1px);
+    }
+
+    .primary:disabled,
+    .seg-btn:disabled,
+    .ghost-btn:disabled {
+      opacity: 0.48;
+      cursor: wait;
+    }
+
+    .summary {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .card {
+      border-radius: 16px;
+      padding: 8px 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      min-height: 62px;
+    }
+
+    .k {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .v {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="titlebar">
+      <div class="title">
+        <span id="statusDot" class="dot"></span>
+        <div class="title-copy">
+          <h1 id="statusTitle">服务未运行</h1>
+          <p>关闭窗口后隐藏到托盘</p>
+        </div>
+      </div>
+      <div class="account-pill">
+        <div id="emojiBox" class="emoji-box">🌾</div>
+        <div class="account-copy">
+          <span id="accountName" class="account-name">未识别账户</span>
+          <span id="accountGreeting" class="account-greet">等待识别</span>
+        </div>
+      </div>
+      <div class="title-actions">
+        <button id="btnSettings" class="ghost-btn interactive" type="button">设置</button>
+        <button id="btnClose" class="close-btn interactive" type="button" aria-label="隐藏">×</button>
+      </div>
+    </header>
+
+    <section class="section">
+      <div class="section-head">
+        <strong>启动菜单</strong>
+        <span id="runtimeHint">确认启动方式</span>
+      </div>
+      <div class="segmented">
+        <button id="btnRuntimeQq" class="seg-btn interactive on" type="button">QQ</button>
+        <button id="btnRuntimeWx" class="seg-btn interactive" type="button">WX</button>
+      </div>
+      <div class="action-grid">
+        <button id="btnService" class="primary interactive" type="button">启动服务</button>
+        <button id="btnAutoFarm" class="primary alt interactive" type="button">启动自动任务</button>
+      </div>
+    </section>
+
+    <section class="summary">
+      <article class="card">
+        <span class="k">链路状态</span>
+        <div id="transportValue" class="v">等待启动</div>
+      </article>
+      <article class="card">
+        <span class="k">自动任务</span>
+        <div id="autoValue" class="v">未启动</div>
+      </article>
+      <article class="card">
+        <span class="k">运行信息</span>
+        <div id="metaValue" class="v">PID --</div>
+      </article>
+      <article class="card">
+        <span class="k">今日统计</span>
+        <div id="statsValue" class="v">收 0 · 偷 0 · 帮 0</div>
+      </article>
+    </section>
+  </main>
+  <script src="./renderer.js"></script>
+</body>
+</html>

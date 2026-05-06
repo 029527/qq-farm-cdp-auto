@@ -22,6 +22,7 @@ const { pathToFileURL } = require('url');
 const args        = process.argv.slice(2);
 const isQQ        = args.includes('--qq');
 const isWX        = args.includes('--wx');
+const noBrowser   = args.includes('--no-browser');
 const runtimeFlag = isQQ ? '--qq' : '--wx';
 const runtimeName = isQQ ? 'QQ' : '微信';
 
@@ -415,7 +416,7 @@ async function main() {
 
     child = spawnMainProcess();
 
-    if (!browserOpened && !browserProbeInFlight) {
+    if (!noBrowser && !browserOpened && !browserProbeInFlight) {
       browserProbeInFlight = true;
       log(`等待控制页就绪（端口 ${port}）...`);
       void waitForServer(port, 30000)

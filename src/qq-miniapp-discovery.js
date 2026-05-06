@@ -39,7 +39,32 @@ function normalizeQqAppId(rawAppId) {
   return appId;
 }
 
+function expandTilde(p) {
+  if (typeof p === "string" && (p === "~" || p.startsWith("~/") || p.startsWith("~\\"))) {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
+
+function getLaunchTargetPlatform() {
+  const explicit = trimToString(process.env.FARM_LAUNCH_TARGET_PLATFORM).toLowerCase();
+  if (explicit === "mac" || explicit === "macos" || explicit === "darwin") {
+    return "darwin";
+  }
+  if (explicit === "win" || explicit === "windows" || explicit === "win32") {
+    return "win32";
+  }
+  return process.platform;
+}
+
 function getDefaultAppDataRoot() {
+  if (getLaunchTargetPlatform() === "darwin") {
+    return path.join(
+      os.homedir(),
+      "Library", "Containers", "com.tencent.qqexminiprogram",
+      "Data", "Library", "Application Support",
+    );
+  }
   return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
 }
 
@@ -50,11 +75,12 @@ function getLocalAppDataRoot() {
 function dedupePaths(paths) {
   const seen = new Set();
   const out = [];
+  const targetPlatform = getLaunchTargetPlatform();
   for (let i = 0; i < paths.length; i += 1) {
     const raw = trimToString(paths[i]);
     if (!raw) continue;
     const resolved = path.resolve(raw);
-    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    const key = targetPlatform === "win32" ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(resolved);
@@ -93,7 +119,7 @@ function getDefaultQqMiniappPkgRoot(srcRoot) {
 function resolveQqMiniappRoots(options = {}) {
   const explicitSrcRoot = trimToString(options.srcRoot);
   const rootCandidates = explicitSrcRoot
-    ? dedupePaths([explicitSrcRoot])
+    ? dedupePaths([expandTilde(explicitSrcRoot)])
     : getDefaultQqMiniappSrcRootCandidates();
   const candidates = rootCandidates.map((srcRoot) => ({
     srcRoot: path.resolve(srcRoot),

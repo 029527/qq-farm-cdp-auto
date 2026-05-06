@@ -4,6 +4,21 @@
 
 ## 2026-05-06
 
+### macOS QQ 路线兼容与文档校正
+
+- 合并 QQ 小程序目录自动识别增强：`src/qq-miniapp-discovery.js` 现已支持 macOS 默认 QQ 容器路径识别，并支持 `FARM_QQ_MINIAPP_SRC_ROOT=~/...` 这类 `~` 开头路径自动展开。
+- 新增 `start.sh`，macOS 下可直接用交互方式选择 `QQ / 微信` 路线并转交 `setup.cjs` 启动，和 `start.bat` 保持一致的快速启动体验。
+- `.env.example` 已补充 Windows / macOS 的 `miniapp_src` 默认路径参考，方便 QQ 路线用户定位本地缓存目录。
+- README 与配置注释已同步校正：当前 macOS 支持主要覆盖 QQ 路线，微信路线仍基于现有 Windows 调试链路，不再使用“整个项目均支持 macOS”的模糊表述。
+
+### 启动前平台选择与轻量入口保留
+
+- `start.bat` 与 `start.sh` 启动前都会先询问目标平台 `Windows / macOS`，该选择仅用于 QQ 小程序默认路径匹配，不改变原有 `QQ / 微信` 运行时切换结构。
+- `src/qq-miniapp-discovery.js` 新增 `FARM_LAUNCH_TARGET_PLATFORM` 显式平台覆盖；即使在同一宿主环境中，也能按所选平台走对应的 QQ 默认目录推断逻辑。
+- `start-lite.bat` 已恢复为原始轻量悬浮窗入口，不再并入标准启动链；其价值仍然是更快切换 `QQ / 微信` 链路，而不是替代标准启动流程。
+
+## 2026-05-06
+
 ### 消息推送渠道补充与版本更新
 
 - 消息推送渠道新增 `Qmsg酱`，现已接入后端配置标准化、渠道可用性判断、测试推送与实际发送链路，可与现有异常通知、日报共用。

@@ -28,7 +28,11 @@
     "release:slim": "node scripts/prepare-release.cjs --publish",
     "clean:runtime": "node scripts/prepare-release.cjs",
     "wmpf": "node wmpf/src/index.js",
-    "wmpf:auto": "node wmpf/src/index.js --auto-farm"
+    "wmpf:auto": "node wmpf/src/index.js --auto-farm",
+    "desktop:sample": "electron desktop-sample/main.js"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
   },
   "engines": {
     "node": ">=22"
