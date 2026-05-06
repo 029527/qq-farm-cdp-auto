@@ -3115,6 +3115,9 @@
     };
 
     const nodes = walk(root).filter(node => /(?:^|\/)grid_\d+_\d+$/.test(fullPath(node)));
+    const infos = [];
+    const infoByPath = new Map();
+    const infoByPosKey = new Map();
     for (let i = 0; i < nodes.length; i++) {
       let info;
       try {
@@ -3122,11 +3125,19 @@
       } catch (_) {
         continue;
       }
+      if (!info) continue;
+      infos.push(info);
+      if (info.path) infoByPath.set(String(info.path), info);
+      const posKey = buildGridPosKey(info.gridPos);
+      if (posKey) infoByPosKey.set(posKey, info);
+    }
 
-      const landId = normalizeLandId(info.landId);
+    for (let i = 0; i < infos.length; i++) {
+      const info = infos[i];
+      const landId = normalizeLandId(info && info.landId);
       if (landId == null) continue;
 
-      if (info.canCollect) idsByType.collect.push(landId);
+      if (isGridCollectActionable(info, farmType, infoByPath, infoByPosKey)) idsByType.collect.push(landId);
       if (info.canWater) idsByType.water.push(landId);
       if (info.canEraseGrass) idsByType.eraseGrass.push(landId);
       if (info.canKillBug) idsByType.killBug.push(landId);
@@ -3140,6 +3151,57 @@
       killBug: normalizeLandIds(idsByType.killBug),
       eraseDead: normalizeLandIds(idsByType.eraseDead)
     };
+  }
+
+  function buildGridPosKey(gridPos) {
+    const x = Number(gridPos && gridPos.x);
+    const y = Number(gridPos && gridPos.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return x + ',' + y;
+  }
+
+  function resolveAnchorGridInfo(info, infoByPath, infoByPosKey) {
+    if (!info || !info.occupiedByMultiTilePlant) return null;
+    const anchorPath = info.occupancyAnchorPath ? String(info.occupancyAnchorPath).trim() : '';
+    if (anchorPath && infoByPath && infoByPath.has(anchorPath)) {
+      return infoByPath.get(anchorPath) || null;
+    }
+    const posKey = buildGridPosKey(info.occupancyAnchorGridPos);
+    if (posKey && infoByPosKey && infoByPosKey.has(posKey)) {
+      return infoByPosKey.get(posKey) || null;
+    }
+    return null;
+  }
+
+  function isGridManualMatureCollectCandidate(info, farmType, infoByPath, infoByPosKey) {
+    if (!info || info.hasPlant !== true) return false;
+    const stageKind = String(info.stageKind || '').trim().toLowerCase();
+    const matureLike = stageKind === 'mature' || info.isMature === true;
+    if (!matureLike) return false;
+    if (info.occupiedByMultiTilePlant !== true) return false;
+    const anchorInfo = resolveAnchorGridInfo(info, infoByPath, infoByPosKey);
+    if (!anchorInfo) return false;
+    const mode = farmType == null ? '' : String(farmType).trim().toLowerCase();
+    if (mode === 'friend') {
+      return anchorInfo.canSteal === true || anchorInfo.canCollect === true;
+    }
+    if (mode === 'own') {
+      return anchorInfo.canHarvest === true || anchorInfo.canCollect === true;
+    }
+    return anchorInfo.canHarvest === true || anchorInfo.canSteal === true || anchorInfo.canCollect === true;
+  }
+
+  function isGridCollectActionable(info, farmType, infoByPath, infoByPosKey) {
+    if (!info) return false;
+    if (info.canCollect) return true;
+    const mode = farmType == null ? '' : String(farmType).trim().toLowerCase();
+    if (mode === 'friend') {
+      return isGridManualMatureCollectCandidate(info, farmType, infoByPath, infoByPosKey) || info.canSteal === true;
+    }
+    if (mode === 'own') {
+      return isGridManualMatureCollectCandidate(info, farmType, infoByPath, infoByPosKey) || info.canHarvest === true;
+    }
+    return isGridManualMatureCollectCandidate(info, farmType, infoByPath, infoByPosKey) || info.canHarvest === true || info.canSteal === true;
   }
 
   function getAllGridNodes(root) {
@@ -3194,8 +3256,7 @@
     }
 
     if (manager) {
-      source = 'one_click_manager';
-      idsByType = {
+      const managerIdsByType = {
         collect: typeof manager.getAllHarvestableLandIds === 'function'
           ? normalizeLandIds(manager.getAllHarvestableLandIds())
           : [],
@@ -3211,6 +3272,15 @@
         eraseDead: typeof manager.getAllEraseableLandIds === 'function'
           ? normalizeLandIds(manager.getAllEraseableLandIds())
           : []
+      };
+      const scannedIdsByType = collectActionableLandIdsByGrid(root, farmType);
+      source = 'manager_plus_grid_scan';
+      idsByType = {
+        collect: normalizeLandIds([].concat(managerIdsByType.collect || [], scannedIdsByType.collect || [])),
+        water: normalizeLandIds([].concat(managerIdsByType.water || [], scannedIdsByType.water || [])),
+        eraseGrass: normalizeLandIds([].concat(managerIdsByType.eraseGrass || [], scannedIdsByType.eraseGrass || [])),
+        killBug: normalizeLandIds([].concat(managerIdsByType.killBug || [], scannedIdsByType.killBug || [])),
+        eraseDead: normalizeLandIds([].concat(managerIdsByType.eraseDead || [], scannedIdsByType.eraseDead || []))
       };
     } else {
       idsByType = collectActionableLandIdsByGrid(root, farmType);
@@ -3280,6 +3350,10 @@
       return input.gridX + '_' + input.gridY;
     }
 
+    if (typeof input.name === 'string' && typeof input.parent === 'object') {
+      return getGridKey(fullPath(input));
+    }
+
     if (input.node) return getGridKey(fullPath(input.node));
     return null;
   }
@@ -3334,6 +3408,17 @@
 
     if (pathOrGridOrComp && typeof pathOrGridOrComp.checkHasPlant === 'function') {
       plant = pathOrGridOrComp.checkHasPlant();
+      if (!plant) {
+        const ownerNode = toNode(safeReadKey(pathOrGridOrComp, 'node'));
+        const plantComp = ownerNode
+          ? (findComponentByName(ownerNode, 'ln') || findBestComponentByScore(ownerNode, scorePlantComponent, 2))
+          : null;
+        if (plantComp) {
+          plant = typeof plantComp.getPlantData === 'function'
+            ? plantComp.getPlantData()
+            : plantComp.plantData;
+        }
+      }
     } else if (pathOrGridOrComp && typeof pathOrGridOrComp.getPlantData === 'function') {
       plant = pathOrGridOrComp.getPlantData();
     } else {
@@ -3343,7 +3428,8 @@
       const gridComp = findComponentByName(node, 'l7') || findBestComponentByScore(node, scoreGridComponent, 2);
       if (gridComp && typeof gridComp.checkHasPlant === 'function') {
         plant = gridComp.checkHasPlant();
-      } else {
+      }
+      if (!plant) {
         const plantComp = findComponentByName(node, 'ln') || findBestComponentByScore(node, scorePlantComponent, 2);
         if (plantComp) {
           plant = typeof plantComp.getPlantData === 'function'
@@ -3354,6 +3440,151 @@
     }
 
     return plant || null;
+  }
+
+  function normalizePlantOccupancySize(value) {
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) && value > 0 ? Math.max(1, Math.round(value)) : null;
+    }
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return null;
+      const direct = Number(text);
+      if (Number.isFinite(direct) && direct > 0) return Math.max(1, Math.round(direct));
+      const pairMatch = /^(\d+)\s*[xX*]\s*(\d+)$/.exec(text);
+      if (pairMatch) {
+        return Math.max(
+          Math.max(1, Number(pairMatch[1]) || 1),
+          Math.max(1, Number(pairMatch[2]) || 1)
+        );
+      }
+      return null;
+    }
+    if (typeof value === 'object') {
+      const candidates = [
+        safeReadKey(value, 'size'),
+        safeReadKey(value, 'width'),
+        safeReadKey(value, 'height'),
+        safeReadKey(value, 'rows'),
+        safeReadKey(value, 'cols'),
+        safeReadKey(value, 'x'),
+        safeReadKey(value, 'y')
+      ];
+      let maxValue = null;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const normalized = normalizePlantOccupancySize(candidates[i]);
+        if (normalized == null) continue;
+        maxValue = maxValue == null ? normalized : Math.max(maxValue, normalized);
+      }
+      return maxValue;
+    }
+    return null;
+  }
+
+  function getPlantOccupancySize(plantRuntime) {
+    if (!plantRuntime || typeof plantRuntime !== 'object') return 1;
+    const config = plantRuntime.config || {};
+    const plantData = plantRuntime.plantData || {};
+    const candidates = [
+      safeReadKey(config, 'size'),
+      safeReadKey(config, 'plant_size'),
+      safeReadKey(config, 'plantSize'),
+      safeReadKey(config, 'grid_size'),
+      safeReadKey(config, 'gridSize'),
+      safeReadKey(config, 'land_size'),
+      safeReadKey(config, 'landSize'),
+      safeReadKey(plantData, 'size'),
+      safeReadKey(plantData, 'plant_size'),
+      safeReadKey(plantData, 'plantSize'),
+      safeReadKey(plantData, 'grid_size'),
+      safeReadKey(plantData, 'gridSize'),
+      safeReadKey(plantData, 'land_size'),
+      safeReadKey(plantData, 'landSize')
+    ];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const normalized = normalizePlantOccupancySize(candidates[i]);
+      if (normalized != null) return normalized;
+    }
+    return 1;
+  }
+
+  function getPlantOccupancyDirections(plantRuntime) {
+    const config = plantRuntime && plantRuntime.config && typeof plantRuntime.config === 'object'
+      ? plantRuntime.config
+      : {};
+    const plantData = plantRuntime && plantRuntime.plantData && typeof plantRuntime.plantData === 'object'
+      ? plantRuntime.plantData
+      : {};
+    const offset = safeReadKey(config, 'offsetPosition') || safeReadKey(plantData, 'offsetPosition') || null;
+    const offsetX = Number(offset && safeReadKey(offset, 'x'));
+    const offsetY = Number(offset && safeReadKey(offset, 'y'));
+    return {
+      xDir: Number.isFinite(offsetX) && offsetX < 0 ? -1 : 1,
+      // 运行时 gridPos 中，地块编号往上排通常对应更大的 y，2x2 作物默认从左下锚点向右上扩展。
+      yDir: Number.isFinite(offsetY) && offsetY < 0 ? -1 : 1,
+    };
+  }
+
+  function isGridCoveredByMultiTileAnchor(targetX, targetY, anchorX, anchorY, plantRuntime) {
+    const plantSize = getPlantOccupancySize(plantRuntime);
+    if (plantSize <= 1) return false;
+    const directions = getPlantOccupancyDirections(plantRuntime);
+    const endX = anchorX + (plantSize - 1) * directions.xDir;
+    const endY = anchorY + (plantSize - 1) * directions.yDir;
+    const minCoveredX = Math.min(anchorX, endX);
+    const maxCoveredX = Math.max(anchorX, endX);
+    const minCoveredY = Math.min(anchorY, endY);
+    const maxCoveredY = Math.max(anchorY, endY);
+    return targetX >= minCoveredX &&
+      targetX <= maxCoveredX &&
+      targetY >= minCoveredY &&
+      targetY <= maxCoveredY;
+  }
+
+  function getCoveringMultiTilePlantRuntime(pathOrNode, opts) {
+    opts = opts || {};
+    const node = toNode(pathOrNode);
+    if (!node) return null;
+
+    const gridPos = getGridCoords(node);
+    const x = Number(gridPos && gridPos.x);
+    const y = Number(gridPos && gridPos.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    const gridOrigin = opts.root ? findGridOrigin(opts.root) : findGridOrigin();
+    if (!gridOrigin) return null;
+
+    const maxSearchSize = Math.max(2, Number(opts.maxSearchSize) || 4);
+    const nodes = getAllGridNodes(gridOrigin);
+    for (let i = 0; i < nodes.length; i += 1) {
+      const anchorNode = nodes[i];
+      if (!anchorNode || anchorNode === node) continue;
+      const anchorCoords = getGridCoords(anchorNode);
+      const anchorX = Number(anchorCoords && anchorCoords.x);
+      const anchorY = Number(anchorCoords && anchorCoords.y);
+      if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) continue;
+      if (Math.abs(anchorX - x) >= maxSearchSize || Math.abs(anchorY - y) >= maxSearchSize) continue;
+
+      const anchorPlantRuntime = getPlantRuntime(anchorNode);
+      if (!anchorPlantRuntime) continue;
+
+      const plantSize = getPlantOccupancySize(anchorPlantRuntime);
+      if (plantSize <= 1) continue;
+      if (!isGridCoveredByMultiTileAnchor(x, y, anchorX, anchorY, anchorPlantRuntime)) continue;
+
+      const plantNode = getPlantNodeByGrid(anchorNode);
+      return {
+        plantRuntime: anchorPlantRuntime,
+        anchorNode: anchorNode,
+        anchorGridPos: { x: anchorX, y: anchorY },
+        plantNode: plantNode ? fullPath(plantNode) : null,
+        plantSize: plantSize,
+        source: 'covered_by_multi_tile_plant'
+      };
+    }
+
+    return null;
   }
 
   /** 与 game.resolved.js 中 PlantStage 枚举一致：MATURE=6, DEAD=7, ERASED=8 */
@@ -3658,7 +3889,9 @@
     if (!node) throw new Error('Grid node not found: ' + pathOrNode);
 
     const gridComp = getGridComponent(node);
-    const plantRuntime = getPlantRuntime(gridComp);
+    const directPlantRuntime = getPlantRuntime(gridComp) || getPlantRuntime(node);
+    const coverRuntime = directPlantRuntime ? null : getCoveringMultiTilePlantRuntime(node, opts);
+    const plantRuntime = directPlantRuntime || (coverRuntime && coverRuntime.plantRuntime) || null;
     const landId = typeof gridComp.getLandId === 'function' ? normalizeLandId(gridComp.getLandId()) : null;
     const landRuntime = getLandRuntime(gridComp);
     const landData = typeof gridComp.getLandData === 'function'
@@ -3667,8 +3900,24 @@
     const landCellData = safeReadKey(gridComp, 'landCellData');
     const stage = getPlantStageSummary(plantRuntime);
     const timing = getMatureTimingSummary(stage);
-    const plantNode = getPlantNodeByGrid(node);
+    const directPlantNode = getPlantNodeByGrid(node);
+    const plantNode = directPlantNode ? fullPath(directPlantNode) : (coverRuntime ? coverRuntime.plantNode : null);
+    const hasDirectPlant = !!directPlantRuntime;
     const hasPlant = !!plantRuntime;
+    const occupancySource = hasDirectPlant ? 'direct' : (coverRuntime ? coverRuntime.source : null);
+    const plantSize = getPlantOccupancySize(plantRuntime);
+    const occupancyAnchorLandId = hasDirectPlant && plantSize > 1
+      ? landId
+      : (
+          coverRuntime && coverRuntime.anchorNode
+            ? normalizeLandId(safeCall(function () {
+              const anchorGridComp = getGridComponent(coverRuntime.anchorNode);
+              return anchorGridComp && typeof anchorGridComp.getLandId === 'function'
+                ? anchorGridComp.getLandId()
+                : null;
+            }, null))
+            : null
+        );
     const landLevelRaw =
       safeReadKey(landRuntime, 'level') != null ? safeReadKey(landRuntime, 'level') :
       (safeReadKey(landRuntime, 'lands_level') != null ? safeReadKey(landRuntime, 'lands_level') :
@@ -3678,10 +3927,12 @@
       : Number(landLevelRaw);
     const landLevelValue = Number.isFinite(landLevelNum) ? landLevelNum : null;
     const actionSets = opts.actionSets || null;
-    const canHarvestRuntime = hasPlant && typeof plantRuntime.canHarvest === 'function'
+    const canHarvestRuntime = hasDirectPlant && typeof plantRuntime.canHarvest === 'function'
       ? !!plantRuntime.canHarvest()
-      : !!stage && !!stage.isMature;
-    const canStealRuntime = hasPlant && typeof plantRuntime.canSteal === 'function'
+      : hasDirectPlant
+        ? !!stage && !!stage.isMature
+        : false;
+    const canStealRuntime = hasDirectPlant && typeof plantRuntime.canSteal === 'function'
       ? !!plantRuntime.canSteal()
       : false;
     const canWaterRuntime = actionSets && actionSets.water && landId != null
@@ -3693,14 +3944,14 @@
           : false;
     const canEraseGrassRuntime = actionSets && actionSets.eraseGrass && landId != null
       ? actionSets.eraseGrass.has(landId)
-      : hasPlant && typeof plantRuntime.canEraseGrass === 'function'
+      : hasDirectPlant && typeof plantRuntime.canEraseGrass === 'function'
         ? !!plantRuntime.canEraseGrass()
         : stage && stage.plantData && stage.plantData.weeds_num != null
           ? Number(stage.plantData.weeds_num) > 0
           : false;
     const canKillBugRuntime = actionSets && actionSets.killBug && landId != null
       ? actionSets.killBug.has(landId)
-      : hasPlant && typeof plantRuntime.canKillBug === 'function'
+      : hasDirectPlant && typeof plantRuntime.canKillBug === 'function'
         ? !!plantRuntime.canKillBug()
         : stage && stage.plantData && stage.plantData.insects_num != null
           ? Number(stage.plantData.insects_num) > 0
@@ -3713,9 +3964,9 @@
         : (canHarvestRuntime || canStealRuntime);
     const canEraseDeadRuntime = actionSets && actionSets.eraseDead && landId != null
       ? actionSets.eraseDead.has(landId)
-      : stage
+      : hasDirectPlant && stage
         ? !!stage.isDead
-        : hasPlant && typeof plantRuntime.isDead === 'function'
+        : hasDirectPlant && typeof plantRuntime.isDead === 'function'
           ? !!plantRuntime.isDead()
           : false;
 
@@ -3728,10 +3979,17 @@
       interactable: typeof gridComp.getInteractable === 'function' ? !!gridComp.getInteractable() : !!gridComp.isInteractable,
       selected: typeof gridComp.getSelected === 'function' ? !!gridComp.getSelected() : !!gridComp.isSelected,
       hasPlant,
+      hasDirectPlant,
+      occupiedByMultiTilePlant: !hasDirectPlant && !!coverRuntime,
+      occupancySource: occupancySource,
       stageKind: getLandStageKind(hasPlant, stage),
-      plantNode: plantNode ? fullPath(plantNode) : null,
+      plantNode: plantNode,
       plantName: stage && stage.config ? stage.config.name || null : null,
       plantId: stage && stage.plantData ? stage.plantData.id : null,
+      plantSize: plantSize,
+      occupancyAnchorLandId: occupancyAnchorLandId,
+      occupancyAnchorGridPos: coverRuntime ? coverRuntime.anchorGridPos : null,
+      occupancyAnchorPath: coverRuntime && coverRuntime.anchorNode ? fullPath(coverRuntime.anchorNode) : null,
       phaseName: timing.phaseName || null,
       currentStage: timing && Number.isFinite(Number(timing.currentStage))
         ? Number(timing.currentStage)
@@ -3822,10 +4080,17 @@
             interactable: s.interactable,
             selected: s.selected,
             hasPlant: s.hasPlant,
+            hasDirectPlant: s.hasDirectPlant,
+            occupiedByMultiTilePlant: s.occupiedByMultiTilePlant,
+            occupancySource: s.occupancySource,
             stageKind: s.stageKind,
             plantNode: s.plantNode,
             plantName: s.plantName,
             plantId: s.plantId,
+            plantSize: s.plantSize,
+            occupancyAnchorLandId: s.occupancyAnchorLandId,
+            occupancyAnchorGridPos: s.occupancyAnchorGridPos,
+            occupancyAnchorPath: s.occupancyAnchorPath,
             phaseName: s.phaseName,
             currentStage: s.currentStage,
             totalStages: s.totalStages,
@@ -9320,7 +9585,6 @@
       const afterLeftFruit = last && last.leftFruit != null ? Number(last.leftFruit) : null;
       const afterPlantId = last && last.plantId != null ? Number(last.plantId) : null;
       const changed =
-        !last ||
         !!(last && last.stageKind !== (beforeInfo && beforeInfo.stageKind)) ||
         !!(last && !!last.hasPlant !== beforeHasPlant) ||
         (beforePlantId != null && afterPlantId != null && beforePlantId !== afterPlantId) ||
@@ -13946,6 +14210,10 @@
     getGridNodeByPlant,
     parseGrowPhases,
     getPlantRuntime,
+    getPlantOccupancySize,
+    getPlantOccupancyDirections,
+    isGridCoveredByMultiTileAnchor,
+    getCoveringMultiTilePlantRuntime,
     getPlantStageSummary,
     getGridState,
     PlantStage,

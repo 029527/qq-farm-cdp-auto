@@ -344,6 +344,34 @@ function openBrowser(url) {
   try { execSync(`xdg-open "${url}"`); } catch (_) {}
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function trimRestartWindow(restarts, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  while (restarts.length > 0 && restarts[0] < cutoff) {
+    restarts.shift();
+  }
+}
+
+function spawnMainProcess() {
+  return spawn('node', ['run.cjs', runtimeFlag], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: false,
+  });
+}
+
+function waitForChildExit(child) {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────
 async function main() {
   console.log();
@@ -355,38 +383,99 @@ async function main() {
 
   const port = getGatewayPort();
   const url  = `http://127.0.0.1:${port}/`;
+  const GUARD_EXIT_CODE = 75;
+  const RESTART_WINDOW_MS = 10 * 60 * 1000;
+  const MAX_RESTARTS_PER_WINDOW = 6;
+  const restarts = [];
+  let browserOpened = false;
+  let browserProbeInFlight = false;
+  let stopping = false;
+  let child = null;
 
-  console.log();
-  log(`启动主程序（${runtimeName} 路线）...`);
-  console.log();
+  const stopChild = () => {
+    if (!child) return;
+    try {
+      child.kill('SIGTERM');
+    } catch (_) {}
+  };
 
-  // 启动主程序，继承 stdio 让日志直接输出到终端
-  const child = spawn('node', ['run.cjs', runtimeFlag], {
-    cwd:   ROOT,
-    stdio: 'inherit',
-    shell: false,
+  process.on('SIGINT', () => {
+    stopping = true;
+    stopChild();
+  });
+  process.on('SIGTERM', () => {
+    stopping = true;
+    stopChild();
   });
 
-  child.on('error', e => {
-    err(`主程序启动失败: ${e.message}`);
-    process.exit(1);
-  });
+  while (true) {
+    console.log();
+    log(`启动主程序（${runtimeName} 路线）...`);
+    console.log();
 
-  child.on('exit', code => {
-    if (code !== 0 && code !== null) {
-      err(`主程序退出，code=${code}`);
-      process.exit(code);
+    child = spawnMainProcess();
+
+    if (!browserOpened && !browserProbeInFlight) {
+      browserProbeInFlight = true;
+      log(`等待控制页就绪（端口 ${port}）...`);
+      void waitForServer(port, 30000)
+        .then(() => {
+          if (browserOpened) return;
+          browserOpened = true;
+          ok(`控制页已就绪 → ${url}`);
+          openBrowser(url);
+        })
+        .catch((e) => {
+          if (!browserOpened) {
+            warn(`${e.message}，请手动打开 ${url}`);
+          }
+        })
+        .finally(() => {
+          browserProbeInFlight = false;
+        });
     }
-  });
 
-  // 等待 HTTP 服务就绪后打开浏览器
-  log(`等待控制页就绪（端口 ${port}）...`);
-  try {
-    await waitForServer(port, 30000);
-    ok(`控制页已就绪 → ${url}`);
-    openBrowser(url);
-  } catch (e) {
-    warn(`${e.message}，请手动打开 ${url}`);
+    let exitInfo;
+    try {
+      exitInfo = await waitForChildExit(child);
+    } catch (e) {
+      err(`主程序启动失败: ${e.message}`);
+      process.exit(1);
+    } finally {
+      child = null;
+    }
+
+    if (stopping) {
+      return;
+    }
+
+    const code = exitInfo && exitInfo.code;
+    const signal = exitInfo && exitInfo.signal;
+    const shouldRestart = signal
+      ? false
+      : (code === GUARD_EXIT_CODE || (code !== 0 && code !== null));
+
+    if (!shouldRestart) {
+      if (signal) {
+        warn(`主程序被信号终止：${signal}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    trimRestartWindow(restarts, RESTART_WINDOW_MS);
+    if (restarts.length >= MAX_RESTARTS_PER_WINDOW) {
+      err(`主程序在 10 分钟内已重启 ${restarts.length} 次，停止自动重启`);
+      process.exit(typeof code === 'number' && code !== 0 ? code : 1);
+    }
+
+    restarts.push(Date.now());
+    const guardRestart = code === GUARD_EXIT_CODE;
+    const delayMs = guardRestart ? 2000 : 5000;
+    warn(guardRestart
+      ? `进程守护已触发小游戏重启，${delayMs / 1000}s 后重新拉起主程序...`
+      : `主程序异常退出，code=${code}，${delayMs / 1000}s 后自动重启...`);
+    await sleep(delayMs);
   }
 }
 

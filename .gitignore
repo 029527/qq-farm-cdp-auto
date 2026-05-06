@@ -14,6 +14,7 @@ data/auto-fertilizer-state.json
 data/friend-help-exp-cache.json
 data/message-push-state.json
 data/player-profile-cache.json
+data/task-events.ndjson
 data/account-stats/
 .env
 .env.local

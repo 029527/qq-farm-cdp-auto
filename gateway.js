@@ -89,6 +89,11 @@ const WAREHOUSE_AUTO_SELL_DEFAULT_HOURS = 12;
 const WAREHOUSE_SELL_CATEGORY_OPTIONS = ["fruit", "seed", "tool", "material"];
 const WAREHOUSE_AUTOFARM_WAIT_TIMEOUT_MS = 90 * 1000;
 const WAREHOUSE_BUSY_RETRY_DELAY_MS = 20 * 1000;
+const WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS = new Set([
+  1001, 1002, 1003, 1004, 1005,
+  1006, 1007, 1008, 1009, 1010,
+  1016, 1017,
+]);
 
 function buildDefaultUiSchedulerTasks() {
   return {
@@ -907,7 +912,7 @@ function classifyWarehouseItem(itemId, itemInfo, runtimeType) {
   const name = String(itemInfo && itemInfo.name || "").trim();
   const interaction = String(itemInfo && itemInfo.interaction_type || "").trim().toLowerCase();
   const type = Number(itemInfo && itemInfo.type) || Number(runtimeType) || 0;
-  if (id >= 1001 && id <= 1010) return "currency";
+  if (WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS.has(id)) return "currency";
   if (type === 19) return "currency";
   if (type === 2 && /金币|点券|钻石|金豆|货币/.test(name)) return "currency";
   if (type === 6 || type === 17) return "fruit";
@@ -1128,8 +1133,18 @@ function normalizeLandDetail(raw, index) {
   const landId = Number(item.landId) || (index + 1);
   const landLevelRaw = item.landLevel;
   const landLevel = landLevelRaw == null || landLevelRaw === "" ? null : Number(landLevelRaw);
-  const plantId = Number(item.plantId) || 0;
-  const plantConfig = plantId > 0 ? getPlantById(plantId) : null;
+  const explicitPlantId = Number(item.plantId) || 0;
+  const runtimePlantId = Number(plantData && plantData.id) || 0;
+  const occupiedByMultiTilePlant = item.occupiedByMultiTilePlant === true;
+  const occupancySource = item.occupancySource ? String(item.occupancySource) : null;
+  const hasDirectPlant = item.hasDirectPlant !== false && item.hasDirectPlant != null ? item.hasDirectPlant === true : null;
+  const resolvedPlantConfig =
+    (explicitPlantId > 0 ? (getPlantById(explicitPlantId) || getPlantBySeedId(explicitPlantId) || getPlantByFruitId(explicitPlantId)) : null) ||
+    (runtimePlantId > 0 ? (getPlantById(runtimePlantId) || getPlantBySeedId(runtimePlantId) || getPlantByFruitId(runtimePlantId)) : null) ||
+    null;
+  const plantId = Number(resolvedPlantConfig && resolvedPlantConfig.id) || explicitPlantId || runtimePlantId || 0;
+  const plantConfig = resolvedPlantConfig;
+  const plantName = item.plantName || (runtime && runtime.config && runtime.config.name) || (plantConfig && plantConfig.name) || null;
   const seedId = Number(plantConfig && plantConfig.seed_id) || 0;
   const totalSeason = Math.max(1, Number(item.totalSeason) || Number(plantConfig && plantConfig.seasons) || 1);
   const currentSeason = plantId > 0
@@ -1137,7 +1152,7 @@ function normalizeLandDetail(raw, index) {
     : 0;
   const matureInSecRaw = Number(item.matureInSec);
   const stageKind = String(item.stageKind || "").trim().toLowerCase();
-  const hasPlant = plantId > 0 || !!item.plantName || !!(runtime && runtime.config);
+  const hasPlant = occupiedByMultiTilePlant || item.hasPlant === true || plantId > 0 || !!plantName || !!(runtime && runtime.config);
   const matureInSec = hasPlant && Number.isFinite(matureInSecRaw) ? Math.max(0, matureInSecRaw) : null;
   const status = !hasPlant || stageKind === "empty"
     ? "empty"
@@ -1181,12 +1196,19 @@ function normalizeLandDetail(raw, index) {
     status,
     statusLabel: getLandStatusLabel(status),
     plantId: plantId > 0 ? plantId : null,
-    plantName: hasPlant ? (item.plantName || (plantConfig && plantConfig.name) || null) : null,
+    plantName: hasPlant ? plantName : null,
     seedId: seedId > 0 ? seedId : null,
     imageUrl: buildPlantStageImageUrl(seedId, {
       currentStage: Number(item.currentStage) || null,
       phaseName: item.phaseName || null,
     }),
+    hasPlant,
+    hasDirectPlant,
+    occupiedByMultiTilePlant,
+    occupancySource,
+    occupancyAnchorGridPos: item.occupancyAnchorGridPos || null,
+    occupancyAnchorPath: item.occupancyAnchorPath || null,
+    occupancyPlantSize: Number(item.plantSize) || Number(plantConfig && plantConfig.size) || 1,
     phaseName: item.phaseName || null,
     currentStage: Number(item.currentStage) || null,
     totalStages: Number(item.totalStages) || null,

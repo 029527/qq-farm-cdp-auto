@@ -74,6 +74,17 @@ const {
   normalizeMessagePushConfig,
 } = require("./message-push-manager");
 const {
+  ProcessGuardManager,
+  normalizeProcessGuardConfig,
+  performRuntimeRestart,
+} = require("./process-guard");
+const {
+  clickMatureEffect,
+  collectAllowedStealTargets,
+  getFarmStatus: getExecutorFarmStatus,
+  triggerOneClickOperation: triggerExecutorOneClickOperation,
+} = require("./auto-farm-executor");
+const {
   getBackpackSeedPlantability,
   pickBackpackSeed,
 } = require("./backpack-seed-priority");
@@ -93,6 +104,11 @@ const WAREHOUSE_AUTO_SELL_DEFAULT_HOURS = 12;
 const WAREHOUSE_SELL_CATEGORY_OPTIONS = ["fruit", "seed", "tool", "material"];
 const WAREHOUSE_AUTOFARM_WAIT_TIMEOUT_MS = 90 * 1000;
 const WAREHOUSE_BUSY_RETRY_DELAY_MS = 20 * 1000;
+const WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS = new Set([
+  1001, 1002, 1003, 1004, 1005,
+  1006, 1007, 1008, 1009, 1010,
+  1016, 1017,
+]);
 
 function buildDefaultUiSchedulerTasks() {
   return {
@@ -243,6 +259,7 @@ const FARM_CONFIG_DEFAULT = {
   uiSchedulerMinGapMs: 350,
   uiSchedulerTasks: buildDefaultUiSchedulerTasks(),
   messagePush: normalizeMessagePushConfig({}),
+  processGuard: normalizeProcessGuardConfig({}),
 };
 
 function decoratePlayerProfile(profile) {
@@ -459,6 +476,7 @@ async function loadFarmConfig() {
       merged.autoWarehouseSellCategories = normalizeWarehouseSellCategoryList(merged.autoWarehouseSellCategories);
       Object.assign(merged, normalizeUiSchedulerConfig(merged));
       merged.messagePush = normalizeMessagePushConfig(parsed.messagePush);
+      merged.processGuard = normalizeProcessGuardConfig(parsed.processGuard);
       return merged;
     }
   } catch (_) {
@@ -503,6 +521,7 @@ async function saveFarmConfig(partial) {
   next.autoWarehouseSellCategories = normalizeWarehouseSellCategoryList(next.autoWarehouseSellCategories);
   Object.assign(next, normalizeUiSchedulerConfig(next));
   next.messagePush = normalizeMessagePushConfig(next.messagePush);
+  next.processGuard = normalizeProcessGuardConfig(next.processGuard);
   const dir = path.join(__dirname, "..", "data");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(farmConfigPath(), JSON.stringify(next, null, 2), "utf8");
@@ -912,7 +931,7 @@ function classifyWarehouseItem(itemId, itemInfo, runtimeType) {
   const name = String(itemInfo && itemInfo.name || "").trim();
   const interaction = String(itemInfo && itemInfo.interaction_type || "").trim().toLowerCase();
   const type = Number(itemInfo && itemInfo.type) || Number(runtimeType) || 0;
-  if (id >= 1001 && id <= 1010) return "currency";
+  if (WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS.has(id)) return "currency";
   if (type === 19) return "currency";
   if (type === 2 && /金币|点券|钻石|金豆|货币/.test(name)) return "currency";
   if (type === 6 || type === 17) return "fruit";
@@ -1133,8 +1152,18 @@ function normalizeLandDetail(raw, index) {
   const landId = Number(item.landId) || (index + 1);
   const landLevelRaw = item.landLevel;
   const landLevel = landLevelRaw == null || landLevelRaw === "" ? null : Number(landLevelRaw);
-  const plantId = Number(item.plantId) || 0;
-  const plantConfig = plantId > 0 ? getPlantById(plantId) : null;
+  const explicitPlantId = Number(item.plantId) || 0;
+  const runtimePlantId = Number(plantData && plantData.id) || 0;
+  const occupiedByMultiTilePlant = item.occupiedByMultiTilePlant === true;
+  const occupancySource = item.occupancySource ? String(item.occupancySource) : null;
+  const hasDirectPlant = item.hasDirectPlant !== false && item.hasDirectPlant != null ? item.hasDirectPlant === true : null;
+  const resolvedPlantConfig =
+    (explicitPlantId > 0 ? (getPlantById(explicitPlantId) || getPlantBySeedId(explicitPlantId) || getPlantByFruitId(explicitPlantId)) : null) ||
+    (runtimePlantId > 0 ? (getPlantById(runtimePlantId) || getPlantBySeedId(runtimePlantId) || getPlantByFruitId(runtimePlantId)) : null) ||
+    null;
+  const plantId = Number(resolvedPlantConfig && resolvedPlantConfig.id) || explicitPlantId || runtimePlantId || 0;
+  const plantConfig = resolvedPlantConfig;
+  const plantName = item.plantName || (runtime && runtime.config && runtime.config.name) || (plantConfig && plantConfig.name) || null;
   const seedId = Number(plantConfig && plantConfig.seed_id) || 0;
   const totalSeason = Math.max(1, Number(item.totalSeason) || Number(plantConfig && plantConfig.seasons) || 1);
   const currentSeason = plantId > 0
@@ -1142,7 +1171,7 @@ function normalizeLandDetail(raw, index) {
     : 0;
   const matureInSecRaw = Number(item.matureInSec);
   const stageKind = String(item.stageKind || "").trim().toLowerCase();
-  const hasPlant = plantId > 0 || !!item.plantName || !!(runtime && runtime.config);
+  const hasPlant = occupiedByMultiTilePlant || item.hasPlant === true || plantId > 0 || !!plantName || !!(runtime && runtime.config);
   const matureInSec = hasPlant && Number.isFinite(matureInSecRaw) ? Math.max(0, matureInSecRaw) : null;
   const status = !hasPlant || stageKind === "empty"
     ? "empty"
@@ -1186,12 +1215,19 @@ function normalizeLandDetail(raw, index) {
     status,
     statusLabel: getLandStatusLabel(status),
     plantId: plantId > 0 ? plantId : null,
-    plantName: hasPlant ? (item.plantName || (plantConfig && plantConfig.name) || null) : null,
+    plantName: hasPlant ? plantName : null,
     seedId: seedId > 0 ? seedId : null,
     imageUrl: buildPlantStageImageUrl(seedId, {
       currentStage: Number(item.currentStage) || null,
       phaseName: item.phaseName || null,
     }),
+    hasPlant,
+    hasDirectPlant,
+    occupiedByMultiTilePlant,
+    occupancySource,
+    occupancyAnchorGridPos: item.occupancyAnchorGridPos || null,
+    occupancyAnchorPath: item.occupancyAnchorPath || null,
+    occupancyPlantSize: Number(item.plantSize) || Number(plantConfig && plantConfig.size) || 1,
     phaseName: item.phaseName || null,
     currentStage: Number(item.currentStage) || null,
     totalStages: Number(item.totalStages) || null,
@@ -1857,12 +1893,18 @@ function normalizeAnalyticsLevelRequest(requestedLevel, profile) {
 }
 
 async function performFriendOperation({ session, callAutomationGameCtl, target, action, enterWaitMs, actionWaitMs, returnHome }) {
-  async function readFarmStatus() {
-    return await callAutomationGameCtl(session, "gameCtl.getFarmStatus", [{
-      includeGrids: false,
+  async function delayMs(ms) {
+    const delay = Math.max(0, Number(ms) || 0);
+    if (delay <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  async function readFarmStatus(options = {}) {
+    return await getExecutorFarmStatus(session, callAutomationGameCtl, {
+      includeGrids: options.includeGrids === true,
       includeLandIds: false,
       silent: true,
-    }]);
+    });
   }
 
   function buildFriendOperations(nextAction, status) {
@@ -1883,14 +1925,14 @@ async function performFriendOperation({ session, callAutomationGameCtl, target, 
     throw new Error(`unsupported friend action: ${nextAction}`);
   }
 
-  async function waitForFriendFarmStatus(timeoutMs) {
+  async function waitForFriendFarmStatus(timeoutMs, options = {}) {
     const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
     let lastStatus = null;
     do {
-      lastStatus = await readFarmStatus();
+      lastStatus = await readFarmStatus(options);
       if (lastStatus && lastStatus.farmType === "friend") return lastStatus;
       if (Date.now() >= deadline) break;
-      await sleep(180);
+      await delayMs(180);
     } while (true);
     return lastStatus;
   }
@@ -1902,17 +1944,101 @@ async function performFriendOperation({ session, callAutomationGameCtl, target, 
     includeAfterOwnership: true,
     silent: true,
   }]);
-  let before = await waitForFriendFarmStatus(Math.max(1200, waitMs, opWaitMs));
+  let before = await waitForFriendFarmStatus(Math.max(1200, waitMs, opWaitMs), {
+    includeGrids: action === "steal",
+  });
   if (!before || before.farmType !== "friend") {
     throw new Error("not in friend farm");
+  }
+
+  if (action === "steal") {
+    const collectBefore = Number(before && before.workCounts && before.workCounts.collect) || 0;
+    const stealTargets = collectAllowedStealTargets(before, []);
+    const targetedHarvestLandIds = Array.isArray(stealTargets && stealTargets.targetedHarvestLandIds)
+      ? [...stealTargets.targetedHarvestLandIds]
+      : [];
+    const multiTileStealDetected = !!(stealTargets && stealTargets.multiTileHarvestDetected === true);
+    const actionableStealLandIds = Array.from(new Set(
+      []
+        .concat(Array.isArray(stealTargets && stealTargets.allowedLandIds) ? stealTargets.allowedLandIds : [])
+        .concat(targetedHarvestLandIds)
+    ));
+    let trigger = null;
+    const actions = [];
+
+    if (multiTileStealDetected && targetedHarvestLandIds.length > 0) {
+      for (let i = 0; i < targetedHarvestLandIds.length; i += 1) {
+        const landId = targetedHarvestLandIds[i];
+        try {
+          const result = await clickMatureEffect(session, callAutomationGameCtl, landId, {
+            waitForResult: true,
+          });
+          actions.push({ ok: !!(result && result.ok), landId, result });
+        } catch (error) {
+          actions.push({
+            ok: false,
+            landId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (opWaitMs > 0 && i < targetedHarvestLandIds.length - 1) {
+          await delayMs(opWaitMs);
+        }
+      }
+      trigger = {
+        op: "TARGETED_HARVEST",
+        mode: "multi_tile",
+        landIds: targetedHarvestLandIds,
+        actions,
+      };
+    } else if (collectBefore > 0 || actionableStealLandIds.length > 0) {
+      trigger = await triggerExecutorOneClickOperation(session, callAutomationGameCtl, "HARVEST", {
+        includeBefore: false,
+        includeAfter: false,
+        silent: true,
+      });
+      if (opWaitMs > 0) {
+        await delayMs(opWaitMs);
+      }
+    }
+
+    const after = await readFarmStatus({ includeGrids: false });
+    let returnHomeResult = null;
+    if (returnHome !== false) {
+      try {
+        returnHomeResult = await callAutomationGameCtl(session, "gameCtl.enterOwnFarm", [{
+          waitMs,
+          includeAfterOwnership: true,
+          silent: true,
+        }]);
+      } catch (error) {
+        returnHomeResult = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      action,
+      enter,
+      before,
+      after,
+      collectBefore,
+      collectAfter: Number(after && after.workCounts && after.workCounts.collect) || 0,
+      trigger,
+      actions,
+      returnHome: returnHomeResult,
+    };
   }
 
   let { operations, workCounts } = buildFriendOperations(action, before);
   if (action === "help" && operations.length <= 0) {
     const deadline = Date.now() + Math.max(600, opWaitMs);
     while (operations.length <= 0 && Date.now() < deadline) {
-      await sleep(180);
-      const nextStatus = await readFarmStatus();
+      await delayMs(180);
+      const nextStatus = await readFarmStatus({ includeGrids: false });
       if (!nextStatus || nextStatus.farmType !== "friend") break;
       before = nextStatus;
       const resolved = buildFriendOperations(action, before);
@@ -1941,7 +2067,7 @@ async function performFriendOperation({ session, callAutomationGameCtl, target, 
     });
   }
 
-  const after = await readFarmStatus();
+  const after = await readFarmStatus({ includeGrids: false });
 
   let returnHomeResult = null;
   if (returnHome !== false) {
@@ -2063,11 +2189,17 @@ function createGateway(config) {
     const ready = hello.gameCtlReady === true ? "ready" : "not_ready";
     const version = hello.version || "?";
     console.log(`[gateway][qq_ws] hello: id=${client.id} appPlatform=${appPlatform} gameCtl=${ready} version=${version}`);
+    if (hello.gameCtlReady === true && processGuard) {
+      processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+    }
     maybeAutoStartAutoFarm(hello.gameCtlReady === true ? "qq_ws_hello_ready" : "qq_ws_hello");
   });
   qqWsSession.on("event", (entry) => {
     const payload = entry && entry.payload && typeof entry.payload === "object" ? entry.payload : null;
     if (!payload || payload.name !== "gameCtlReadyChanged" || payload.ready !== true) return;
+    if (processGuard) {
+      processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+    }
     maybeAutoStartAutoFarm("qq_ws_gamectl_ready");
   });
   qqWsSession.on("clientDisconnected", (_snapshot, client) => {
@@ -2096,10 +2228,21 @@ function createGateway(config) {
 
   async function ensureAutomationSession() {
     const target = resolveAutomationRuntimeTarget();
-    if (target === "qq_ws") {
-      return await qqWsSession.connect();
+    try {
+      if (target === "qq_ws") {
+        const session = await qqWsSession.connect();
+        if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+        return session;
+      }
+      const session = await ensureCdp();
+      if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+      return session;
+    } catch (error) {
+      if (processGuard) {
+        processGuard.noteRuntimeError(error, { snapshot: getAutomationTransportState() });
+      }
+      throw error;
     }
-    return await ensureCdp();
   }
 
   function isQqRuntimeSession(session) {
@@ -2107,17 +2250,33 @@ function createGateway(config) {
   }
 
   async function ensureAutomationGameCtl(session) {
-    if (isQqRuntimeSession(session)) {
-      return await qqWsSession.ensureGameCtl(REQUIRED_GAME_CTL_METHODS);
+    try {
+      const result = isQqRuntimeSession(session)
+        ? await qqWsSession.ensureGameCtl(REQUIRED_GAME_CTL_METHODS)
+        : await ensureGameCtl(session, projectRoot, REQUIRED_GAME_CTL_METHODS);
+      if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+      return result;
+    } catch (error) {
+      if (processGuard) {
+        processGuard.noteRuntimeError(error, { snapshot: getAutomationTransportState() });
+      }
+      throw error;
     }
-    return await ensureGameCtl(session, projectRoot, REQUIRED_GAME_CTL_METHODS);
   }
 
   async function callAutomationGameCtl(session, pathName, args, callOptions) {
-    if (isQqRuntimeSession(session)) {
-      return await qqWsSession.call(pathName, args, callOptions);
+    try {
+      const result = isQqRuntimeSession(session)
+        ? await qqWsSession.call(pathName, args, callOptions)
+        : await callGameCtl(session, pathName, args, callOptions);
+      if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+      return result;
+    } catch (error) {
+      if (processGuard) {
+        processGuard.noteRuntimeError(error, { snapshot: getAutomationTransportState() });
+      }
+      throw error;
     }
-    return await callGameCtl(session, pathName, args, callOptions);
   }
 
   async function callSelectedRuntimePath(pathName, args) {
@@ -2133,6 +2292,8 @@ function createGateway(config) {
       qqWs: getQqWsSnapshot(),
     };
   }
+
+  let processGuard = null;
 
   function getQqBundleSnapshot(options = {}) {
     let snapshot = null;
@@ -2446,6 +2607,44 @@ function createGateway(config) {
       path.join(projectRoot, "logs", "gateway-err.log"),
     ],
   });
+  let gatewayClosing = false;
+  function closeGatewayResources() {
+    if (gatewayClosing) return;
+    gatewayClosing = true;
+    autoFarmManager.stop("gateway close");
+    void messagePushManager.close();
+    if (processGuard) {
+      processGuard.close();
+    }
+    void previewManager.close();
+    if (warehouseRuntimeState.timer) {
+      clearTimeout(warehouseRuntimeState.timer);
+      warehouseRuntimeState.timer = null;
+    }
+    if (wmpfBridge) {
+      wmpfBridge.emitter.off("miniappconnected", kickEnsureCdpOnTransport);
+    }
+    qqWsSession.close();
+    if (wss) wss.close();
+    httpServer.close();
+    if (cdp) cdp.close();
+    cdp = null;
+  }
+  async function requestProcessGuardRestart(context) {
+    const runtimeTarget = context && context.runtimeTarget ? context.runtimeTarget : resolveAutomationRuntimeTarget();
+    const reason = context && context.reason ? context.reason : "unknown";
+    console.warn(`[guard] runtime restart requested: runtime=${runtimeTarget} reason=${reason}`);
+    const result = await performRuntimeRestart(context && context.config ? context.config : {}, runtimeTarget);
+    console.warn(`[guard] runtime restart dispatched: runtime=${runtimeTarget}; gateway stays alive and waits for reconnect`);
+    return result;
+  }
+  processGuard = new ProcessGuardManager({
+    initialConfig: FARM_CONFIG_DEFAULT.processGuard,
+    getTransportSnapshot: getAutomationTransportState,
+    onTriggerRestart: requestProcessGuardRestart,
+    logger: console,
+  });
+  processGuard.start();
   let autoFarmBootConfigLoaded = false;
   let autoFarmBootStateLoaded = false;
   let autoFarmBootHelpStateLoaded = false;
@@ -2921,12 +3120,14 @@ function createGateway(config) {
     .then((savedConfig) => {
       autoFarmManager.updateConfig(savedConfig);
       messagePushManager.updateConfig(savedConfig.messagePush);
+      processGuard.updateConfig(savedConfig.processGuard);
       autoFarmBootConfigLoaded = true;
       scheduleWarehouseMaintenance(3000);
       maybeAutoStartAutoFarm("config_loaded");
     })
     .catch(() => {
       messagePushManager.updateConfig(FARM_CONFIG_DEFAULT.messagePush);
+      processGuard.updateConfig(FARM_CONFIG_DEFAULT.processGuard);
       autoFarmBootConfigLoaded = true;
       scheduleWarehouseMaintenance(3000);
       maybeAutoStartAutoFarm("config_load_failed");
@@ -3534,6 +3735,7 @@ function createGateway(config) {
         cdp: getCdpSnapshot(),
         qqWs: getQqWsSnapshot(),
         qqBundle: getQqBundleSnapshot(),
+        processGuard: processGuard.getState(),
         autoFarm: autoFarmManager.getState(),
         preview: previewManager.getState(),
         cdpSessionInitialized: cdp != null,
@@ -3667,9 +3869,35 @@ function createGateway(config) {
         const data = await saveFarmConfig(parsed);
         autoFarmManager.updateConfig(data);
         messagePushManager.updateConfig(data.messagePush);
+        processGuard.updateConfig(data.processGuard);
         scheduleWarehouseMaintenance(1500);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, data }));
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === "POST" && urlPath === "/api/process-guard/restart") {
+      try {
+        const parsed = await readJsonBody(req);
+        const snapshot = getAutomationTransportState();
+        const result = await processGuard.manualRestart({
+          reason: parsed && parsed.reason ? parsed.reason : "manual_request",
+          snapshot,
+        });
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          data: {
+            result,
+            runtimeTarget: resolveAutomationRuntimeTarget(),
+            processGuard: processGuard.getState(),
+          },
+        }));
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
         res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
@@ -4553,6 +4781,7 @@ function createGateway(config) {
           savedConfig = await saveFarmConfig(parsed.config);
           autoFarmManager.updateConfig(savedConfig);
           messagePushManager.updateConfig(savedConfig.messagePush);
+          processGuard.updateConfig(savedConfig.processGuard);
           scheduleWarehouseMaintenance(1500);
         }
 
@@ -4702,21 +4931,7 @@ function createGateway(config) {
     httpServer,
     wss,
     close: () => {
-      autoFarmManager.stop("gateway close");
-      void messagePushManager.close();
-      void previewManager.close();
-      if (warehouseRuntimeState.timer) {
-        clearTimeout(warehouseRuntimeState.timer);
-        warehouseRuntimeState.timer = null;
-      }
-      if (wmpfBridge) {
-        wmpfBridge.emitter.off("miniappconnected", kickEnsureCdpOnTransport);
-      }
-      qqWsSession.close();
-      wss.close();
-      httpServer.close();
-      if (cdp) cdp.close();
-      cdp = null;
+      closeGatewayResources();
     },
     getCdp: () => cdp,
     getQqWsSession: () => qqWsSession,

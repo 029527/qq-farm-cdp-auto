@@ -54,5 +54,20 @@ function shutdown() {
   process.exit(0);
 }
 
+function fatalShutdown(label, error) {
+  const detail = error instanceof Error ? (error.stack || error.message) : String(error);
+  console.error(`[gateway] ${label}: ${detail}`);
+  try {
+    close();
+  } catch (_) {}
+  process.exit(1);
+}
+
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("uncaughtException", (error) => {
+  fatalShutdown("uncaughtException", error);
+});
+process.on("unhandledRejection", (reason) => {
+  fatalShutdown("unhandledRejection", reason);
+});

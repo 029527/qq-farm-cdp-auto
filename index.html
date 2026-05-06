@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>农场 CDP 控制台 V1.6.1</title>
+  <title>农场 CDP 控制台 V1.7.0</title>
   <style>
     :root {
       --bg: #f4ecdc;
@@ -3949,6 +3949,7 @@
             <div class="tag-row message-push-channel-row" id="messagePushChannels">
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="serverchan" /> Server酱</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="pushplus" /> PushPlus</label>
+              <label class="tag-check message-push-channel-pill"><input type="checkbox" value="qmsg" /> Qmsg酱</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="wecom" /> 企业微信</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="dingtalk" /> 钉钉</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="feishu" /> 飞书</label>
@@ -3985,6 +3986,28 @@
                   </select>
                 </label>
               </div>
+            </article>
+
+            <article class="card message-push-config-card" id="messagePushPanelQmsg" hidden>
+              <h2>Qmsg酱</h2>
+              <div class="input-grid compact" style="margin-top:12px">
+                <label class="field-block">
+                  <span>KEY</span>
+                  <input type="text" id="messagePushQmsgKey" placeholder="Qmsg KEY" />
+                </label>
+                <label class="field-block">
+                  <span>发送类型</span>
+                  <select id="messagePushQmsgType">
+                    <option value="private">私聊消息</option>
+                    <option value="group">群消息</option>
+                  </select>
+                </label>
+                <label class="field-block">
+                  <span>目标 QQ / 群号</span>
+                  <input type="text" id="messagePushQmsgTarget" placeholder="可选，不填则按 Qmsg 后台默认配置发送" />
+                </label>
+              </div>
+              <p class="hint" style="margin-top:10px">使用私聊消息时填写 QQ 号，使用群消息时填写群号；留空则使用 Qmsg酱后台默认接收对象。</p>
             </article>
 
             <article class="card message-push-config-card" id="messagePushPanelWecom" hidden>
@@ -4408,6 +4431,9 @@
       const messagePushServerChanSendKey = document.getElementById("messagePushServerChanSendKey");
       const messagePushPushPlusToken = document.getElementById("messagePushPushPlusToken");
       const messagePushPushPlusFormat = document.getElementById("messagePushPushPlusFormat");
+      const messagePushQmsgKey = document.getElementById("messagePushQmsgKey");
+      const messagePushQmsgType = document.getElementById("messagePushQmsgType");
+      const messagePushQmsgTarget = document.getElementById("messagePushQmsgTarget");
       const messagePushWecomWebhook = document.getElementById("messagePushWecomWebhook");
       const messagePushWecomFormat = document.getElementById("messagePushWecomFormat");
       const messagePushDingtalkWebhook = document.getElementById("messagePushDingtalkWebhook");
@@ -7012,7 +7038,7 @@
       }
 
       function normalizeMessagePushChannelList(input) {
-        var supported = ["serverchan", "pushplus", "wecom", "dingtalk", "feishu", "telegram", "bark", "ntfy", "webhook"];
+        var supported = ["serverchan", "pushplus", "qmsg", "wecom", "dingtalk", "feishu", "telegram", "bark", "ntfy", "webhook"];
         var source = Array.isArray(input)
           ? input
           : String(input == null ? "" : input).split(/[\r\n,，;；]+/);
@@ -7056,6 +7082,7 @@
         var map = {
           serverchan: "Server酱",
           pushplus: "PushPlus",
+          qmsg: "Qmsg酱",
           wecom: "企业微信",
           dingtalk: "钉钉",
           feishu: "飞书",
@@ -7108,6 +7135,7 @@
         var panelMap = {
           serverchan: document.getElementById("messagePushPanelServerchan"),
           pushplus: document.getElementById("messagePushPanelPushplus"),
+          qmsg: document.getElementById("messagePushPanelQmsg"),
           wecom: document.getElementById("messagePushPanelWecom"),
           dingtalk: document.getElementById("messagePushPanelDingtalk"),
           feishu: document.getElementById("messagePushPanelFeishu"),
@@ -7153,6 +7181,9 @@
         if (messagePushServerChanSendKey) messagePushServerChanSendKey.value = channels.serverChanSendKey || "";
         if (messagePushPushPlusToken) messagePushPushPlusToken.value = channels.pushPlusToken || "";
         if (messagePushPushPlusFormat) messagePushPushPlusFormat.value = channelFormats.pushplus || "markdown";
+        if (messagePushQmsgKey) messagePushQmsgKey.value = channels.qmsgKey || "";
+        if (messagePushQmsgType) messagePushQmsgType.value = channels.qmsgType || "private";
+        if (messagePushQmsgTarget) messagePushQmsgTarget.value = channels.qmsgTarget || "";
         if (messagePushWecomWebhook) messagePushWecomWebhook.value = channels.wecomWebhook || "";
         if (messagePushWecomFormat) messagePushWecomFormat.value = channelFormats.wecom || "text";
         if (messagePushDingtalkWebhook) messagePushDingtalkWebhook.value = channels.dingtalkWebhook || "";
@@ -7194,6 +7225,9 @@
           channels: {
             serverChanSendKey: String(messagePushServerChanSendKey && messagePushServerChanSendKey.value || "").trim(),
             pushPlusToken: String(messagePushPushPlusToken && messagePushPushPlusToken.value || "").trim(),
+            qmsgKey: String(messagePushQmsgKey && messagePushQmsgKey.value || "").trim(),
+            qmsgType: String(messagePushQmsgType && messagePushQmsgType.value || "private").trim().toLowerCase() === "group" ? "group" : "private",
+            qmsgTarget: String(messagePushQmsgTarget && messagePushQmsgTarget.value || "").trim(),
             wecomWebhook: String(messagePushWecomWebhook && messagePushWecomWebhook.value || "").trim(),
             dingtalkWebhook: String(messagePushDingtalkWebhook && messagePushDingtalkWebhook.value || "").trim(),
             dingtalkSecret: String(messagePushDingtalkSecret && messagePushDingtalkSecret.value || "").trim(),
@@ -7217,6 +7251,7 @@
         var next = [];
         if (channels.serverChanSendKey) next.push("serverchan");
         if (channels.pushPlusToken) next.push("pushplus");
+        if (channels.qmsgKey) next.push("qmsg");
         if (channels.wecomWebhook) next.push("wecom");
         if (channels.dingtalkWebhook) next.push("dingtalk");
         if (channels.feishuWebhook) next.push("feishu");
@@ -7395,23 +7430,26 @@
           autoWarehouseSellEnabled: src.autoWarehouseSellEnabled === true,
           autoWarehouseSellIntervalHour: Number(src.autoWarehouseSellIntervalHour != null ? src.autoWarehouseSellIntervalHour : 12),
           autoWarehouseSellCategories: normalizeWarehouseSellCategoryList(src.autoWarehouseSellCategories),
-          messagePush: {
-            enabled: !!messagePush.enabled,
-            abnormalEnabled: messagePush.abnormalEnabled !== false,
-            abnormalTimeoutThreshold: Number(messagePush.abnormalTimeoutThreshold != null ? messagePush.abnormalTimeoutThreshold : 3),
-            selectedChannels: resolveMessagePushSelectedChannels(messagePush),
+              messagePush: {
+                enabled: !!messagePush.enabled,
+                abnormalEnabled: messagePush.abnormalEnabled !== false,
+                abnormalTimeoutThreshold: Number(messagePush.abnormalTimeoutThreshold != null ? messagePush.abnormalTimeoutThreshold : 3),
+                selectedChannels: resolveMessagePushSelectedChannels(messagePush),
             channelFormats: normalizeMessagePushChannelFormats(messagePush.channelFormats),
             dailyEnabled: !!messagePush.dailyEnabled,
             dailyTime: String(messagePush.dailyTime || "09:00").trim() || "09:00",
             logMonitorEnabled: messagePush.logMonitorEnabled !== false,
             logScanIntervalSec: Number(messagePush.logScanIntervalSec != null ? messagePush.logScanIntervalSec : 15),
             httpTimeoutMs: Number(messagePush.httpTimeoutMs != null ? messagePush.httpTimeoutMs : 10000),
-            channels: {
-              serverChanSendKey: String(messagePush.channels && messagePush.channels.serverChanSendKey || "").trim(),
-              pushPlusToken: String(messagePush.channels && messagePush.channels.pushPlusToken || "").trim(),
-              wecomWebhook: String(messagePush.channels && messagePush.channels.wecomWebhook || "").trim(),
-              dingtalkWebhook: String(messagePush.channels && messagePush.channels.dingtalkWebhook || "").trim(),
-              dingtalkSecret: String(messagePush.channels && messagePush.channels.dingtalkSecret || "").trim(),
+              channels: {
+                serverChanSendKey: String(messagePush.channels && messagePush.channels.serverChanSendKey || "").trim(),
+                pushPlusToken: String(messagePush.channels && messagePush.channels.pushPlusToken || "").trim(),
+                qmsgKey: String(messagePush.channels && messagePush.channels.qmsgKey || "").trim(),
+                qmsgType: String(messagePush.channels && messagePush.channels.qmsgType || "private").trim().toLowerCase() === "group" ? "group" : "private",
+                qmsgTarget: String(messagePush.channels && messagePush.channels.qmsgTarget || "").trim(),
+                wecomWebhook: String(messagePush.channels && messagePush.channels.wecomWebhook || "").trim(),
+                dingtalkWebhook: String(messagePush.channels && messagePush.channels.dingtalkWebhook || "").trim(),
+                dingtalkSecret: String(messagePush.channels && messagePush.channels.dingtalkSecret || "").trim(),
               feishuWebhook: String(messagePush.channels && messagePush.channels.feishuWebhook || "").trim(),
               telegramBotToken: String(messagePush.channels && messagePush.channels.telegramBotToken || "").trim(),
               telegramChatId: String(messagePush.channels && messagePush.channels.telegramChatId || "").trim(),
@@ -8355,6 +8393,7 @@
             landDetailGrid.innerHTML = lands.map(function (item) {
               var statusTone = item.status === "mature" ? "good" : (item.status === "dead" ? "bad" : "");
               var tags = [];
+              if (item.occupiedByMultiTilePlant) tags.push('<span class="land-mini-tag">2x2占地</span>');
               if (item.needWater) tags.push('<span class="land-mini-tag warn">待浇水</span>');
               if (item.needWeed) tags.push('<span class="land-mini-tag warn">待除草</span>');
               if (item.needBug) tags.push('<span class="land-mini-tag warn">待杀虫</span>');

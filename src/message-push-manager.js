@@ -13,6 +13,7 @@ const ABNORMAL_FINGERPRINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const SUPPORTED_CHANNEL_TYPES = [
   "serverchan",
   "pushplus",
+  "qmsg",
   "wecom",
   "dingtalk",
   "feishu",
@@ -25,6 +26,7 @@ const SUPPORTED_CHANNEL_TYPES = [
 const CHANNEL_LABELS = {
   serverchan: "Server酱",
   pushplus: "PushPlus",
+  qmsg: "Qmsg酱",
   wecom: "企业微信机器人",
   dingtalk: "钉钉机器人",
   feishu: "飞书机器人",
@@ -100,6 +102,11 @@ function normalizeWebhookMethod(value) {
   return ["POST", "PUT", "PATCH"].includes(method) ? method : "POST";
 }
 
+function normalizeQmsgType(value) {
+  const type = String(value == null ? "" : value).trim().toLowerCase();
+  return type === "group" ? "group" : "private";
+}
+
 function getSupportedChannelFormats(type) {
   return Array.isArray(CHANNEL_FORMAT_OPTIONS[type]) ? CHANNEL_FORMAT_OPTIONS[type] : [];
 }
@@ -134,6 +141,7 @@ function getConfiguredChannelTypes(config) {
   const channels = config && config.channels ? config.channels : {};
   if (channels.serverChanSendKey) next.push("serverchan");
   if (channels.pushPlusToken) next.push("pushplus");
+  if (channels.qmsgKey) next.push("qmsg");
   if (channels.wecomWebhook) next.push("wecom");
   if (channels.dingtalkWebhook) next.push("dingtalk");
   if (channels.feishuWebhook) next.push("feishu");
@@ -179,6 +187,9 @@ function normalizeMessagePushConfig(raw) {
     channels: {
       serverChanSendKey: toStringValue(channels.serverChanSendKey).trim(),
       pushPlusToken: toStringValue(channels.pushPlusToken).trim(),
+      qmsgKey: toStringValue(channels.qmsgKey).trim(),
+      qmsgType: normalizeQmsgType(channels.qmsgType),
+      qmsgTarget: toStringValue(channels.qmsgTarget).trim(),
       wecomWebhook: toStringValue(channels.wecomWebhook).trim(),
       dingtalkWebhook: toStringValue(channels.dingtalkWebhook).trim(),
       dingtalkSecret: toStringValue(channels.dingtalkSecret).trim(),
@@ -804,6 +815,31 @@ async function sendToPushPlus(config, payload) {
   }
 }
 
+async function sendToQmsg(config, payload) {
+  const qmsgType = normalizeQmsgType(config.channels.qmsgType);
+  const body = {
+    msg: payload.plainText,
+  };
+  if (config.channels.qmsgTarget) {
+    body.qq = config.channels.qmsgTarget;
+  }
+  const response = await fetchWithTimeout(`https://qmsg.zendee.cn/${qmsgType === "group" ? "jgroup" : "jsend"}/${encodeURIComponent(config.channels.qmsgKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, config.httpTimeoutMs);
+  if (!response.ok) {
+    throw new Error(`Qmsg酱 HTTP ${response.status}`);
+  }
+  let result = null;
+  try {
+    result = await response.json();
+  } catch (_) {}
+  if (result && result.success === false) {
+    throw new Error(`Qmsg酱 ${result.reason || "发送失败"}`);
+  }
+}
+
 async function sendToWecom(config, payload) {
   const format = getChannelMessageFormat(config, "wecom");
   const body = format === "text"
@@ -962,6 +998,7 @@ async function sendToWebhook(config, payload) {
 async function sendByChannel(type, config, payload) {
   if (type === "serverchan") return await sendToServerChan(config, payload);
   if (type === "pushplus") return await sendToPushPlus(config, payload);
+  if (type === "qmsg") return await sendToQmsg(config, payload);
   if (type === "wecom") return await sendToWecom(config, payload);
   if (type === "dingtalk") return await sendToDingtalk(config, payload);
   if (type === "feishu") return await sendToFeishu(config, payload);

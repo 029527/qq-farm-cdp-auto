@@ -50,24 +50,16 @@ const hookOnLoadScene = (a1, sceneOffsets) => {
         .add(sceneOffsets[2]);
     send(`[hook] scene: ${miniappScenePtr.readInt()}`);
 
+    const sceneNumber = miniappScenePtr.readInt();
     // 1000: from issue #83 <-- will crash the process
-    // 1007: from issue #80
-    // 1008: from issue #53
-    // 1027: from issue #78
-    // 1035: from issue #78
-    // 1053: from issue #25
-    // 1074: from issue #32
-    // 1145: from search
-    // 1178: from phone (issue #117)
-    // 1256: from recent
-    // 1260: from frequently used
-    // 1302: from services
-    // 1308: minigame?
-    const sceneNumberArray = [
-        1005, 1007, 1008, 1027, 1035, 1053, 1074, 1145, 1178, 1256, 1260, 1302,
-        1308,
-    ];
-    if (!sceneNumberArray.includes(miniappScenePtr.readInt())) {
+    // 其余入口场景在不同微信版本/入口里波动很大，继续使用白名单会导致“小游戏已打开但调试桥完全不起”
+    // 的情况，所以这里改成仅屏蔽明确有风险的 scene。
+    const blockedSceneNumbers = new Set([1000]);
+    if (!Number.isInteger(sceneNumber) || sceneNumber <= 0) {
+        return;
+    }
+    if (blockedSceneNumbers.has(sceneNumber)) {
+        send(`[hook] skip blocked scene: ${sceneNumber}`);
         return;
     }
     send("[hook] hook scene condition -> 1101");

@@ -224,6 +224,75 @@ function collectEmptyLandIds(status) {
   return emptyLandIds;
 }
 
+function pushUniquePositiveLandId(list, seen, value) {
+  const landId = Number(value);
+  if (!Number.isFinite(landId) || landId <= 0 || seen.has(landId)) return;
+  seen.add(landId);
+  list.push(landId);
+}
+
+function getGridOccupancyPlantSize(grid) {
+  const directPlantSize = Number(grid && grid.plantSize) || 0;
+  const occupancyPlantSize = Number(grid && grid.occupancyPlantSize) || 0;
+  return Math.max(directPlantSize, occupancyPlantSize);
+}
+
+function isMultiTileStealGrid(grid) {
+  return !!(
+    grid
+    && (
+      grid.occupiedByMultiTilePlant === true
+      || getGridOccupancyPlantSize(grid) > 1
+    )
+  );
+}
+
+function buildGridPosKey(gridPos) {
+  const x = Number(gridPos && gridPos.x);
+  const y = Number(gridPos && gridPos.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return `${x},${y}`;
+}
+
+function resolveMultiTileAnchorLandId(grid, gridByPath, gridByPosKey) {
+  if (!grid) return null;
+  const explicitAnchorLandId = Number(grid.occupancyAnchorLandId);
+  if (Number.isFinite(explicitAnchorLandId) && explicitAnchorLandId > 0) return explicitAnchorLandId;
+  if (grid.hasDirectPlant === true) {
+    const directLandId = Number(grid.landId);
+    return Number.isFinite(directLandId) && directLandId > 0 ? directLandId : null;
+  }
+  const anchorPath = grid.occupancyAnchorPath ? String(grid.occupancyAnchorPath).trim() : "";
+  if (anchorPath && gridByPath.has(anchorPath)) {
+    const anchorByPath = gridByPath.get(anchorPath);
+    const anchorLandId = Number(anchorByPath && anchorByPath.landId);
+    if (Number.isFinite(anchorLandId) && anchorLandId > 0) return anchorLandId;
+  }
+  const anchorPosKey = buildGridPosKey(grid.occupancyAnchorGridPos);
+  if (anchorPosKey && gridByPosKey.has(anchorPosKey)) {
+    const anchorByPos = gridByPosKey.get(anchorPosKey);
+    const anchorLandId = Number(anchorByPos && anchorByPos.landId);
+    if (Number.isFinite(anchorLandId) && anchorLandId > 0) return anchorLandId;
+  }
+  return null;
+}
+
+function resolveMultiTileAnchorGrid(grid, gridByPath, gridByPosKey) {
+  if (!grid) return null;
+  const explicitAnchorLandId = Number(grid.occupancyAnchorLandId);
+  if (Number.isFinite(explicitAnchorLandId) && explicitAnchorLandId > 0) {
+    for (const candidate of gridByPath.values()) {
+      if (Number(candidate && candidate.landId) === explicitAnchorLandId) return candidate || null;
+    }
+  }
+  if (grid.hasDirectPlant === true) return grid;
+  const anchorPath = grid.occupancyAnchorPath ? String(grid.occupancyAnchorPath).trim() : "";
+  if (anchorPath && gridByPath.has(anchorPath)) return gridByPath.get(anchorPath) || null;
+  const anchorPosKey = buildGridPosKey(grid.occupancyAnchorGridPos);
+  if (anchorPosKey && gridByPosKey.has(anchorPosKey)) return gridByPosKey.get(anchorPosKey) || null;
+  return null;
+}
+
 function collectAllowedStealTargets(status, stealPlantBlacklist) {
   const blacklistIds = normalizePositiveIntList(stealPlantBlacklist);
   const blacklistSet = new Set(blacklistIds);
@@ -243,9 +312,26 @@ function collectAllowedStealTargets(status, stealPlantBlacklist) {
   const allowedLandIds = [];
   const skipped = [];
   const fallbackAllowedLandIds = [];
+  const targetedHarvestLandIds = [];
   const inspected = [];
   const seenAllowed = new Set();
+  const seenFallbackAllowed = new Set();
+  const seenTargetedHarvest = new Set();
   const blacklistedActionableLandIds = [];
+  const multiTileActionableLandIds = [];
+  const multiTileFallbackLandIds = [];
+  const seenMultiTileActionable = new Set();
+  const seenMultiTileFallback = new Set();
+  const gridByPath = new Map();
+  const gridByPosKey = new Map();
+
+  for (let i = 0; i < grids.length; i += 1) {
+    const grid = grids[i];
+    if (!grid || typeof grid !== "object") continue;
+    if (grid.path) gridByPath.set(String(grid.path), grid);
+    const gridPosKey = buildGridPosKey(grid.gridPos);
+    if (gridPosKey) gridByPosKey.set(gridPosKey, grid);
+  }
 
   for (let i = 0; i < grids.length; i += 1) {
     const grid = grids[i];
@@ -276,11 +362,28 @@ function collectAllowedStealTargets(status, stealPlantBlacklist) {
       || grid.stageKind === "mature"
       || Number(grid.matureInSec) === 0;
     const hasFruit = (Number(grid.leftFruit) || 0) > 0 || (Number(grid.fruitNum) || 0) > 0;
-    const looksHarvestableFallback = !!(grid.hasPlant && !grid.isDead && (looksMature || hasFruit));
+    const occupancyPlantSize = getGridOccupancyPlantSize(grid);
+    const multiTileHarvest = isMultiTileStealGrid(grid);
+    const multiTileAnchorGrid = multiTileHarvest
+      ? resolveMultiTileAnchorGrid(grid, gridByPath, gridByPosKey)
+      : null;
+    const multiTileFallbackCollectable = !!(
+      multiTileHarvest
+      && multiTileAnchorGrid
+      && (multiTileAnchorGrid.canSteal === true || multiTileAnchorGrid.canCollect === true)
+      && grid.hasPlant
+      && !grid.isDead
+      && (looksMature || hasFruit)
+    );
+    const multiTileAnchorLandId = multiTileHarvest
+      ? resolveMultiTileAnchorLandId(grid, gridByPath, gridByPosKey)
+      : null;
+    const targetLandId = multiTileAnchorLandId || landId;
     const actionable = canSteal;
     const blacklisted = matchedByPlantId || matchedByResolvedPlantId || matchedBySeedId || matchedByFruitId || matchedByName;
     inspected.push({
       landId,
+      targetLandId,
       plantId: plantId || null,
       plantName,
       resolvedPlantId: resolvedPlantId || null,
@@ -293,6 +396,11 @@ function collectAllowedStealTargets(status, stealPlantBlacklist) {
       matureInSec: Number.isFinite(Number(grid.matureInSec)) ? Number(grid.matureInSec) : null,
       leftFruit: Number.isFinite(Number(grid.leftFruit)) ? Number(grid.leftFruit) : null,
       fruitNum: Number.isFinite(Number(grid.fruitNum)) ? Number(grid.fruitNum) : null,
+      hasDirectPlant: grid.hasDirectPlant === true,
+      occupiedByMultiTilePlant: grid.occupiedByMultiTilePlant === true,
+      occupancyPlantSize: occupancyPlantSize > 0 ? occupancyPlantSize : null,
+      occupancyAnchorLandId: Number(grid.occupancyAnchorLandId) || null,
+      multiTileHarvest,
       matchedByPlantId,
       matchedByResolvedPlantId,
       matchedBySeedId,
@@ -300,7 +408,7 @@ function collectAllowedStealTargets(status, stealPlantBlacklist) {
       matchedByName,
       blacklisted,
       actionable,
-      fallbackHarvestable: looksHarvestableFallback,
+      fallbackHarvestable: multiTileFallbackCollectable,
     });
     if (blacklisted) {
       skipped.push({
@@ -318,25 +426,45 @@ function collectAllowedStealTargets(status, stealPlantBlacklist) {
     }
 
     if (canSteal) {
-      if (!seenAllowed.has(landId)) {
-        seenAllowed.add(landId);
-        allowedLandIds.push(landId);
+      pushUniquePositiveLandId(allowedLandIds, seenAllowed, landId);
+      if (multiTileHarvest) {
+        pushUniquePositiveLandId(multiTileActionableLandIds, seenMultiTileActionable, targetLandId);
       }
       continue;
     }
 
-    if (looksHarvestableFallback && !seenAllowed.has(landId)) {
-      seenAllowed.add(landId);
-      fallbackAllowedLandIds.push(landId);
+    if (multiTileFallbackCollectable) {
+      pushUniquePositiveLandId(fallbackAllowedLandIds, seenFallbackAllowed, landId);
+      if (multiTileHarvest) {
+        pushUniquePositiveLandId(multiTileFallbackLandIds, seenMultiTileFallback, targetLandId);
+      }
+    }
+  }
+
+  const multiTileHarvestDetected = multiTileActionableLandIds.length > 0 || multiTileFallbackLandIds.length > 0;
+  if (multiTileHarvestDetected) {
+    for (let i = 0; i < allowedLandIds.length; i += 1) {
+      pushUniquePositiveLandId(targetedHarvestLandIds, seenTargetedHarvest, allowedLandIds[i]);
+    }
+    for (let i = 0; i < multiTileFallbackLandIds.length; i += 1) {
+      pushUniquePositiveLandId(targetedHarvestLandIds, seenTargetedHarvest, multiTileFallbackLandIds[i]);
+    }
+  } else if (blacklistedActionableLandIds.length > 0) {
+    for (let i = 0; i < allowedLandIds.length; i += 1) {
+      pushUniquePositiveLandId(targetedHarvestLandIds, seenTargetedHarvest, allowedLandIds[i]);
     }
   }
 
   return {
     allowedLandIds,
     fallbackAllowedLandIds,
+    targetedHarvestLandIds,
     skipped,
     inspected,
     blacklistedActionableLandIds,
+    multiTileActionableLandIds,
+    multiTileFallbackLandIds,
+    multiTileHarvestDetected,
   };
 }
 
@@ -2154,23 +2282,46 @@ function collectMatureLandIds(status) {
   const grids = Array.isArray(status && status.grids) ? status.grids : [];
   const seen = new Set();
   const out = [];
+  const gridByPath = new Map();
+  const gridByPosKey = new Map();
 
   for (let i = 0; i < grids.length; i += 1) {
     const grid = grids[i];
-    const landId = Number(grid && grid.landId);
-    if (!Number.isFinite(landId) || landId <= 0 || seen.has(landId)) continue;
+    if (!grid || typeof grid !== "object") continue;
+    if (grid.path) gridByPath.set(String(grid.path), grid);
+    const gridPosKey = buildGridPosKey(grid.gridPos);
+    if (gridPosKey) gridByPosKey.set(gridPosKey, grid);
+  }
+
+  for (let i = 0; i < grids.length; i += 1) {
+    const grid = grids[i];
     if (!grid) continue;
+    const landId = Number(grid.landId);
+    if (!Number.isFinite(landId) || landId <= 0) continue;
     const stageKind = String(grid.stageKind || "").trim().toLowerCase();
-    const canHarvestLike = !!(
-      grid.canCollect
-      || grid.canHarvest
-      || grid.canSteal
-      || grid.canEraseDead
+    const multiTileHarvestCandidate = !!(
+      grid.occupiedByMultiTilePlant === true
+      || (Number(grid.plantSize) || 0) > 1
+      || (Number(grid.occupancyPlantSize) || 0) > 1
     );
-    const matchesSupplementalStage = stageKind === "mature" || stageKind === "dead" || grid.isDead === true;
+    const targetLandId = multiTileHarvestCandidate
+      ? (resolveMultiTileAnchorLandId(grid, gridByPath, gridByPosKey) || landId)
+      : landId;
+    if (!Number.isFinite(targetLandId) || targetLandId <= 0 || seen.has(targetLandId)) continue;
+    const targetGrid = multiTileHarvestCandidate
+      ? (resolveMultiTileAnchorGrid(grid, gridByPath, gridByPosKey) || grid)
+      : grid;
+    const canHarvestLike = !!(
+      (targetGrid && targetGrid.canCollect)
+      || (targetGrid && targetGrid.canHarvest)
+      || (targetGrid && targetGrid.canSteal)
+      || (targetGrid && targetGrid.canEraseDead)
+      || multiTileHarvestCandidate
+    );
+    const matchesSupplementalStage = stageKind === "mature" || grid.isMature === true;
     if (!matchesSupplementalStage || !canHarvestLike) continue;
-    seen.add(landId);
-    out.push(landId);
+    seen.add(targetLandId);
+    out.push(targetLandId);
   }
 
   return out;
@@ -2212,7 +2363,7 @@ async function runSupplementalMatureEffectHarvest(session, callGameCtl, opts) {
         waitForResult: rawOpts.waitForResult !== false,
         timeoutMs: rawOpts.timeoutMs,
         pollMs: rawOpts.pollMs,
-        fallbackDispatch: false,
+        fallbackDispatch: rawOpts.fallbackDispatch !== false,
       });
       actions.push({ ok: !!(result && result.ok), landId, result });
     } catch (error) {
@@ -3349,34 +3500,45 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
     const gid = Number(item && item.gid);
     return Number.isFinite(gid) && gid > 0 && friendCooldowns.has(gid);
   });
+  function getFriendCollectCount(friend) {
+    return Number(friend && friend.workCounts && friend.workCounts.collect) || 0;
+  }
+  function getFriendHelpCount(friend) {
+    return getHelpWorkTotal(getHelpWorkCounts(friend));
+  }
+  function compareFriendPriority(a, b) {
+    const stealDiff = getFriendCollectCount(b) - getFriendCollectCount(a);
+    if (stealDiff !== 0) return stealDiff;
+    const helpDiff = getFriendHelpCount(b) - getFriendHelpCount(a);
+    if (helpDiff !== 0) return helpDiff;
+    return (Number(a && a.rank) || 0) - (Number(b && b.rank) || 0);
+  }
+
   const selectableFriends = friendList.filter((item) => !cooldownBlockedFriends.includes(item));
+  const explicitStealableCandidates = selectableFriends.filter((item) => (
+    stealEnabled
+    && getFriendCollectCount(item) > 0
+    && !isActionBlockedByFriendRules(item, "steal").blocked
+  ));
+  const fallbackStealCandidates = 0;
   const helpableCandidates = selectableFriends.filter((item) => (
-    getHelpWorkTotal(getHelpWorkCounts(item)) > 0
+    getFriendHelpCount(item) > 0
     && !isActionBlockedByFriendRules(item, "help").blocked
   )).length;
   const candidates = selectableFriends
     .filter((item) => {
-      const workCounts = item && item.workCounts && typeof item.workCounts === "object"
-        ? item.workCounts
-        : {};
+      const collectCount = getFriendCollectCount(item);
+      const helpCount = getFriendHelpCount(item);
       const canSteal = stealEnabled
-        && (Number(workCounts.collect) || 0) > 0
+        && collectCount > 0
         && !isActionBlockedByFriendRules(item, "steal").blocked;
       const canHelp = helpEnabled
-        && getHelpWorkTotal(getHelpWorkCounts(item)) > 0
+        && helpCount > 0
         && !isActionBlockedByFriendRules(item, "help").blocked
         && !helpLimitReached;
       return canSteal || canHelp;
     })
-    .sort((a, b) => {
-      const stealDiff = (Number(b && b.workCounts && b.workCounts.collect) || 0)
-        - (Number(a && a.workCounts && a.workCounts.collect) || 0);
-      if (stealDiff !== 0) return stealDiff;
-      const helpDiff = getHelpWorkTotal(getHelpWorkCounts(b))
-        - getHelpWorkTotal(getHelpWorkCounts(a));
-      if (helpDiff !== 0) return helpDiff;
-      return (Number(a && a.rank) || 0) - (Number(b && b.rank) || 0);
-    })
+    .sort(compareFriendPriority)
     .slice(0, maxFriends);
   const visits = [];
   reportProgress(opts, `好友巡查：可操作好友 ${candidates.length} 位`, {
@@ -3399,7 +3561,7 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
         includeAfterOwnership: true,
       });
       const beforeStatus = await getFarmStatus(session, callGameCtl, {
-        includeGrids: stealPlantBlacklist.length > 0,
+        includeGrids: stealEnabled || stealPlantBlacklist.length > 0,
         includeLandIds: false,
       });
       if (beforeStatus.farmType !== "friend") {
@@ -3422,8 +3584,25 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
       const collectBefore = getWorkCount(beforeStatus, "collect");
       const helpBeforeCounts = getHelpWorkCounts(beforeStatus);
       const helpBeforeTotal = getHelpWorkTotal(helpBeforeCounts);
-      const canSteal = stealEnabled && collectBefore > 0;
+      const stealTargets = stealEnabled
+        ? collectAllowedStealTargets(
+          beforeStatus,
+          stealPlantBlacklistEnabled && stealPlantBlacklist.length > 0 ? stealPlantBlacklist : []
+        )
+        : null;
+      const actionableStealLandIds = stealTargets
+        ? Array.from(new Set(
+          []
+            .concat(Array.isArray(stealTargets.allowedLandIds) ? stealTargets.allowedLandIds : [])
+            .concat(Array.isArray(stealTargets.targetedHarvestLandIds) ? stealTargets.targetedHarvestLandIds : [])
+        ))
+        : [];
+      const canSteal = stealEnabled && (collectBefore > 0 || actionableStealLandIds.length > 0);
       const canHelp = helpEnabled && helpBeforeTotal > 0 && !helpLimitReached;
+      const multiTileStealDetected = !!(stealTargets && stealTargets.multiTileHarvestDetected === true);
+      const targetedHarvestLandIds = Array.isArray(stealTargets && stealTargets.targetedHarvestLandIds)
+        ? [...stealTargets.targetedHarvestLandIds]
+        : [];
       if (!canSteal && !canHelp) {
         const reason = helpEnabled && helpBeforeTotal > 0 && helpLimitReached
           ? "help_daily_limit_reached"
@@ -3468,12 +3647,16 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
       };
       let stealSkippedReason = null;
       if (canSteal && stealPlantBlacklistEnabled && stealPlantBlacklist.length > 0) {
-        const targets = collectAllowedStealTargets(beforeStatus, stealPlantBlacklist);
+        const targets = stealTargets || collectAllowedStealTargets(beforeStatus, stealPlantBlacklist);
         const matchedLandIds = Array.isArray(targets.blacklistedActionableLandIds)
           ? [...targets.blacklistedActionableLandIds]
           : [];
         const hasBlacklistedTargets = matchedLandIds.length > 0;
         const allowedLandIds = Array.isArray(targets.allowedLandIds) ? [...targets.allowedLandIds] : [];
+        const candidateTargetedLandIds = Array.isArray(targets.targetedHarvestLandIds)
+          ? [...targets.targetedHarvestLandIds]
+          : [];
+        const hasMultiTileTargets = !!(targets.multiTileHarvestDetected === true && candidateTargetedLandIds.length > 0);
         const skippedLandIds = Array.isArray(targets.skipped)
           ? targets.skipped
             .filter((item) => item && item.actionable === true)
@@ -3486,26 +3669,34 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
           matchedCount: matchedLandIds.length,
           matchedLandIds,
           allowedLandIds,
+          targetedHarvestLandIds: candidateTargetedLandIds,
+          multiTileActionableLandIds: Array.isArray(targets.multiTileActionableLandIds)
+            ? [...targets.multiTileActionableLandIds]
+            : [],
+          multiTileFallbackLandIds: Array.isArray(targets.multiTileFallbackLandIds)
+            ? [...targets.multiTileFallbackLandIds]
+            : [],
           skippedLandIds,
           hit: hasBlacklistedTargets,
           action: hasBlacklistedTargets
             ? (stealPlantBlacklistStrategy === 1 ? "skip_whole_farm" : "skip_blacklisted_lands")
-            : "one_click",
+            : (hasMultiTileTargets ? "targeted_multi_tile_harvest" : "one_click"),
           reason: hasBlacklistedTargets
             ? (stealPlantBlacklistStrategy === 1 ? "blacklist_hit_skip_whole_farm" : "blacklist_hit_skip_land")
-            : "blacklist_miss",
+            : (hasMultiTileTargets ? "multi_tile_manual_harvest_required" : "blacklist_miss"),
         };
         selective = {
           module: "friend_blacklist",
           action: "inspect",
           mode: hasBlacklistedTargets
             ? (stealPlantBlacklistStrategy === 1 ? "skip_whole_farm" : "targeted")
-            : "one_click",
+            : (hasMultiTileTargets ? "targeted_multi_tile" : "one_click"),
           enabled: true,
           blacklistedPlantIds: stealPlantBlacklist,
           strategy: stealPlantBlacklistStrategy,
           strategyLabel: blacklistPolicy.strategyLabel,
           allowedLandIds,
+          targetedHarvestLandIds: candidateTargetedLandIds,
           skipped: targets.skipped,
           inspected: targets.inspected,
           decision: blacklistDecision,
@@ -3538,7 +3729,7 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
             continue;
           }
         }
-        if (hasBlacklistedTargets && allowedLandIds.length <= 0) {
+        if (hasBlacklistedTargets && candidateTargetedLandIds.length <= 0) {
           stealSkippedReason = "all_collectable_blacklisted";
           if (!canHelp) {
             reportProgress(opts, `好友巡查：跳过 ${friend.displayName || friend.name || friend.gid}，可偷地块均在黑名单中`, {
@@ -3566,12 +3757,12 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
             continue;
           }
         }
-        if (!stealSkippedReason && hasBlacklistedTargets) {
+        if (!stealSkippedReason && (hasBlacklistedTargets || hasMultiTileTargets)) {
           visitAction = "targeted_harvest";
           const actions = [];
-          for (let j = 0; j < allowedLandIds.length; j += 1) {
+          for (let j = 0; j < candidateTargetedLandIds.length; j += 1) {
             throwIfAutomationStopped(opts);
-            const landId = allowedLandIds[j];
+            const landId = candidateTargetedLandIds[j];
             try {
               const result = await clickMatureEffect(session, callGameCtl, landId, {
                 waitForResult: true,
@@ -3581,11 +3772,16 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
               actions.push({ ok: false, landId, error: toErrorMessage(error) });
               if (opts && opts.stopOnError) break;
             }
-            if (actionWaitMs > 0 && j < allowedLandIds.length - 1) {
+            if (actionWaitMs > 0 && j < candidateTargetedLandIds.length - 1) {
               await waitWithAutomationControl(actionWaitMs, opts);
             }
           }
-          trigger = { op: "TARGETED_HARVEST", actions };
+          trigger = {
+            op: "TARGETED_HARVEST",
+            landIds: candidateTargetedLandIds,
+            mode: hasMultiTileTargets ? "multi_tile" : "blacklist_targeted",
+            actions,
+          };
         } else if (!stealSkippedReason) {
           trigger = await triggerOneClickOperation(session, callGameCtl, "HARVEST", {
             includeBefore: false,
@@ -3597,13 +3793,40 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
           }
         }
       } else if (canSteal) {
-        trigger = await triggerOneClickOperation(session, callGameCtl, "HARVEST", {
-          includeBefore: false,
-          includeAfter: false,
-        });
-        visitAction = "one_click_harvest";
-        if (actionWaitMs > 0) {
-          await waitWithAutomationControl(actionWaitMs, opts);
+        if (multiTileStealDetected && targetedHarvestLandIds.length > 0) {
+          visitAction = "targeted_harvest";
+          const actions = [];
+          for (let j = 0; j < targetedHarvestLandIds.length; j += 1) {
+            throwIfAutomationStopped(opts);
+            const landId = targetedHarvestLandIds[j];
+            try {
+              const result = await clickMatureEffect(session, callGameCtl, landId, {
+                waitForResult: true,
+              });
+              actions.push({ ok: !!(result && result.ok), landId, result });
+            } catch (error) {
+              actions.push({ ok: false, landId, error: toErrorMessage(error) });
+              if (opts && opts.stopOnError) break;
+            }
+            if (actionWaitMs > 0 && j < targetedHarvestLandIds.length - 1) {
+              await waitWithAutomationControl(actionWaitMs, opts);
+            }
+          }
+          trigger = {
+            op: "TARGETED_HARVEST",
+            landIds: targetedHarvestLandIds,
+            mode: "multi_tile",
+            actions,
+          };
+        } else {
+          trigger = await triggerOneClickOperation(session, callGameCtl, "HARVEST", {
+            includeBefore: false,
+            includeAfter: false,
+          });
+          visitAction = "one_click_harvest";
+          if (actionWaitMs > 0) {
+            await waitWithAutomationControl(actionWaitMs, opts);
+          }
         }
       }
 
@@ -3720,7 +3943,8 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
     refreshError: friendData && friendData.refreshError ? friendData.refreshError : null,
     refreshMode: friendData && friendData.refreshMode ? friendData.refreshMode : "none",
     totalCandidates: selectableFriends.length,
-    stealableCandidates: selectableFriends.filter((item) => (Number(item && item.workCounts && item.workCounts.collect) || 0) > 0).length,
+    stealableCandidates: explicitStealableCandidates.length,
+    fallbackStealCandidates,
     helpableCandidates,
     helpEnabled,
     helpDailyLimit,
@@ -3959,5 +4183,9 @@ async function runAutoFarmCycle({ session, callGameCtl, options }) {
 }
 
 module.exports = {
+  clickMatureEffect,
+  collectAllowedStealTargets,
+  getFarmStatus,
   runAutoFarmCycle,
+  triggerOneClickOperation,
 };

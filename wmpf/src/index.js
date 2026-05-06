@@ -56,6 +56,28 @@ debugMessageEmitter.transportState = {
     miniappConnected: false,
     cdpClientCount: 0,
     cdpClientConnected: false,
+    lastMiniappConnectedAt: null,
+    lastMiniappDisconnectedAt: null,
+    lastMiniappScene: null,
+    lastMiniappScenePatchedAt: null,
+    lastFridaMessage: null,
+};
+const update_transport_state_from_frida = (payload, logger) => {
+    const text = typeof payload === "string" ? payload : String(payload ?? "");
+    debugMessageEmitter.transportState.lastFridaMessage = text;
+    const sceneMatch = text.match(/\[hook\] scene: (-?\d+)/);
+    if (sceneMatch) {
+        const sceneNumber = Number(sceneMatch[1]);
+        if (Number.isFinite(sceneNumber)) {
+            debugMessageEmitter.transportState.lastMiniappScene = sceneNumber;
+            logger.info(`[frida] miniapp scene detected: ${sceneNumber}`);
+        }
+        return;
+    }
+    if (text.includes("[hook] hook scene condition -> 1101")) {
+        debugMessageEmitter.transportState.lastMiniappScenePatchedAt = new Date().toISOString();
+        logger.info("[frida] miniapp scene patched -> 1101");
+    }
 };
 const bufferToHexString = (buffer) => {
     return Array.from(new Uint8Array(buffer))
@@ -188,6 +210,7 @@ const debug_server = (options, logger) => {
         debugMessageEmitter.transportState.miniappClientCount += 1;
         debugMessageEmitter.transportState.miniappConnected =
             debugMessageEmitter.transportState.miniappClientCount > 0;
+        debugMessageEmitter.transportState.lastMiniappConnectedAt = new Date().toISOString();
         debugMessageEmitter.emit("miniappconnected");
         ws.on("message", onMessage);
         ws.on("error", (err) => {
@@ -198,6 +221,7 @@ const debug_server = (options, logger) => {
             debugMessageEmitter.transportState.miniappClientCount = Math.max(0, debugMessageEmitter.transportState.miniappClientCount - 1);
             debugMessageEmitter.transportState.miniappConnected =
                 debugMessageEmitter.transportState.miniappClientCount > 0;
+            debugMessageEmitter.transportState.lastMiniappDisconnectedAt = new Date().toISOString();
             debugMessageEmitter.emit("miniappdisconnected");
         });
     });
@@ -351,6 +375,7 @@ const frida_server = async (options, logger) => {
             logger.error("[frida client]", message);
             return;
         }
+        update_transport_state_from_frida(message.payload, logger);
         logger.frida_debug("[frida client]", message.payload);
     });
     await script.load();

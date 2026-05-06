@@ -1160,6 +1160,9 @@ function buildAutoFarmCycleLogMessages({ due, injectState, result, cooldownAppli
       const parts = [];
       parts.push("候选 " + (Number(friendSteal.totalCandidates) || 0));
       parts.push("可偷 " + (Number(friendSteal.stealableCandidates) || 0));
+      if ((Number(friendSteal.fallbackStealCandidates) || 0) > 0) {
+        parts.push("待复查 " + (Number(friendSteal.fallbackStealCandidates) || 0));
+      }
       if (friendSteal.helpEnabled) {
         parts.push("可帮 " + (Number(friendSteal.helpableCandidates) || 0));
         parts.push(formatFriendHelpStateSummary(friendSteal.helpState));
@@ -1183,12 +1186,14 @@ function buildAutoFarmCycleLogMessages({ due, injectState, result, cooldownAppli
         level: "info",
         message: `自动农场 / 好友巡检：${parts.join(" · ")}`,
       });
-      if (friendSteal.helpEnabled && (Number(friendSteal.helpableCandidates) || 0) > 0 && (Number(friendSteal.stealableCandidates) || 0) <= 0) {
+      const explicitStealableCount = Number(friendSteal.stealableCandidates) || 0;
+      const fallbackStealCount = Number(friendSteal.fallbackStealCandidates) || 0;
+      if (friendSteal.helpEnabled && (Number(friendSteal.helpableCandidates) || 0) > 0 && explicitStealableCount <= 0 && fallbackStealCount <= 0) {
         messages.push({
           level: "info",
           message: "自动农场 / 好友巡检：本轮无可偷好友，仅执行帮忙巡检",
         });
-      } else if ((Number(friendSteal.stealableCandidates) || 0) <= 0) {
+      } else if (explicitStealableCount <= 0 && fallbackStealCount <= 0) {
         messages.push({
           level: "info",
           message: "自动农场 / 好友巡检：本轮无可偷好友",
@@ -1242,17 +1247,9 @@ function buildAutoFarmCycleLogMessages({ due, injectState, result, cooldownAppli
         return;
       }
       if (visit.reason === "no_collectable_after_enter") {
-        messages.push({
-          level: "info",
-          message: `自动农场 / 好友偷菜 / ${friendLabel}：进场后无可摘作物${selectiveParts.length ? " · " + selectiveParts.join(" · ") : ""}`,
-        });
         return;
       }
       if (visit.reason === "no_actionable_after_enter") {
-        messages.push({
-          level: "info",
-          message: `自动农场 / 好友巡检 / ${friendLabel}：进场后无可偷可帮地块${selectiveParts.length ? " · " + selectiveParts.join(" · ") : ""}`,
-        });
         return;
       }
       if (harvested) {

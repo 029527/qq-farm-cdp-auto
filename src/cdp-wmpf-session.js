@@ -149,6 +149,15 @@ class WmpfCdpSession extends EventEmitter {
     };
     this._onMiniappDisconnected = () => {
       this._lastTransportEvent = "miniappdisconnected";
+      if (this._prepareDebounce) {
+        clearTimeout(this._prepareDebounce);
+        this._prepareDebounce = null;
+      }
+      this.prepareGen += 1;
+      this._prepareInFlight = false;
+      this.prepareError = null;
+      this._markContextStale("miniapp disconnected");
+      console.log("[gateway] 检测到小游戏调试桥已断开，已清空 execution context，等待重新连接");
     };
     this.transport.on("miniappconnected", this._onMiniapp);
     this.transport.on("miniappdisconnected", this._onMiniappDisconnected);
@@ -371,22 +380,27 @@ class WmpfCdpSession extends EventEmitter {
   getStatusSnapshot() {
     const explicit = this.config.executionContextId;
     const explicitOk = explicit != null && Number.isFinite(explicit);
+    const prepareState = this._describePrepareState();
+    const transportConnected = this._hasMiniappTransport();
     /** @type {Record<string, unknown>} */
     const snap = {
       mode: "wmpf_bridge",
       connected: this._connected,
       executionContextId: this.executionContextId,
-      contextReady: explicitOk ? true : this.executionContextId != null,
+      contextReady: explicitOk ? transportConnected : this.executionContextId != null,
       prepareError: this.prepareError ? this.prepareError.message : null,
-      prepareState: this._describePrepareState(),
+      prepareState,
       prepareInFlight: this._prepareInFlight,
       lastPrepareReason: this._lastPrepareReason,
       lastTransportEvent: this._lastTransportEvent,
       lastPrepareStartedAt: this._lastPrepareStartedAt || null,
       lastPrepareFinishedAt: this._lastPrepareFinishedAt || null,
-      transportConnected: this._hasMiniappTransport(),
+      transportConnected,
       explicitExecutionContextId: explicitOk ? explicit : null,
     };
+    if (prepareState === "waiting_miniapp") {
+      snap.diagnosticHint = "微信渠道正在等待小游戏调试桥连接。该桥接只会在小游戏重新加载时触发；请在服务启动后重新进入小游戏。";
+    }
     const transportState = this._getTransportState();
     if (transportState) {
       snap.transportState = transportState;

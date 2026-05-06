@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>农场 CDP 控制台 V1.6.1</title>
+  <title>农场 CDP 控制台 V1.7.0</title>
   <style>
     :root {
       --bg: #f4ecdc;
@@ -165,7 +165,7 @@
 
     .status-strip {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
       margin: 18px 0 16px;
     }
@@ -2756,6 +2756,13 @@
           <span id="txtGameSide">等待健康状态</span>
         </div>
       </div>
+      <div class="status-chip">
+        <span class="chip-label">进程守护</span>
+        <div class="chip-value">
+          <span class="dot" id="dotGuard"></span>
+          <span id="txtGuard">等待健康状态</span>
+        </div>
+      </div>
     </section>
 
     <nav class="tabbar" role="tablist">
@@ -2770,6 +2777,7 @@
       <button type="button" class="tab-btn" data-tab="account" role="tab">账户状态</button>
       <button type="button" class="tab-btn" data-tab="logs" role="tab">日志中心</button>
       <button type="button" class="tab-btn" data-tab="messagepush" role="tab">消息推送</button>
+      <button type="button" class="tab-btn" data-tab="system" role="tab">系统配置</button>
     </nav>
 
     <section class="panel" id="panel-scheduler" data-tab="scheduler">
@@ -2948,6 +2956,7 @@
           <p class="summary-note" id="txtInjectState">等待脚本状态</p>
           <p class="summary-note" id="txtRuntimeNotes">QQ WS 模式不需要注入；画面预览仍然只在 CDP 路线可用。</p>
         </article>
+
       </div>
     </section>
 
@@ -3949,6 +3958,7 @@
             <div class="tag-row message-push-channel-row" id="messagePushChannels">
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="serverchan" /> Server酱</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="pushplus" /> PushPlus</label>
+              <label class="tag-check message-push-channel-pill"><input type="checkbox" value="qmsg" /> Qmsg酱</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="wecom" /> 企业微信</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="dingtalk" /> 钉钉</label>
               <label class="tag-check message-push-channel-pill"><input type="checkbox" value="feishu" /> 飞书</label>
@@ -3985,6 +3995,28 @@
                   </select>
                 </label>
               </div>
+            </article>
+
+            <article class="card message-push-config-card" id="messagePushPanelQmsg" hidden>
+              <h2>Qmsg酱</h2>
+              <div class="input-grid compact" style="margin-top:12px">
+                <label class="field-block">
+                  <span>KEY</span>
+                  <input type="text" id="messagePushQmsgKey" placeholder="Qmsg KEY" />
+                </label>
+                <label class="field-block">
+                  <span>发送类型</span>
+                  <select id="messagePushQmsgType">
+                    <option value="private">私聊消息</option>
+                    <option value="group">群消息</option>
+                  </select>
+                </label>
+                <label class="field-block">
+                  <span>目标 QQ / 群号</span>
+                  <input type="text" id="messagePushQmsgTarget" placeholder="可选，不填则按 Qmsg 后台默认配置发送" />
+                </label>
+              </div>
+              <p class="hint" style="margin-top:10px">使用私聊消息时填写 QQ 号，使用群消息时填写群号；留空则使用 Qmsg酱后台默认接收对象。</p>
             </article>
 
             <article class="card message-push-config-card" id="messagePushPanelWecom" hidden>
@@ -4115,6 +4147,96 @@
         </article>
       </div>
     </section>
+
+    <section class="panel" id="panel-system" data-tab="system">
+      <div class="panel-grid friend-grid">
+        <article class="card span-full">
+          <div class="card-head">
+            <div>
+              <h2>系统配置</h2>
+              <p class="hint">放置运行时无关的系统级参数。当前这里集中管理小游戏进程守护与自动恢复策略。</p>
+            </div>
+            <div class="action-row">
+              <button type="button" class="action" id="btnProcessGuardRestartCurrent">重启当前小程序</button>
+            </div>
+          </div>
+          <p class="summary-note" id="txtProcessGuardState">等待守护状态</p>
+          <p class="summary-note" id="txtProcessGuardDetail">等待健康状态</p>
+        </article>
+
+        <article class="card span-full">
+          <div class="card-head">
+            <div>
+              <h2>进程守护</h2>
+              <p class="hint">连续多次小程序连接超时后，按当前链路自动重启小游戏；主项目常驻等待自动回连，微信优先复用 QQ 的关窗后重拉起逻辑，完整重启仅作兜底。</p>
+            </div>
+          </div>
+          <div class="check-grid">
+            <label class="check-card inline">
+              <input type="checkbox" id="processGuardEnabled" />
+              <div>
+                <strong>启用进程守护</strong>
+                <small>达到阈值后仅重启当前小游戏实例，主程序保持运行并等待 QQ / 微信自动回连。</small>
+              </div>
+            </label>
+          </div>
+          <div class="input-grid compact">
+            <label class="field-block">
+              <span>连续超时阈值</span>
+              <input type="number" id="processGuardTimeoutThreshold" min="1" max="20" value="3" />
+            </label>
+            <label class="field-block">
+              <span>守护轮询(ms)</span>
+              <input type="number" id="processGuardMonitorIntervalMs" min="500" step="500" value="3000" />
+            </label>
+            <label class="field-block">
+              <span>重启前等待(秒)</span>
+              <input type="number" id="processGuardRestartPauseSec" min="0" max="600" value="15" />
+            </label>
+            <label class="field-block">
+              <span>10 分钟最大重启次数</span>
+              <input type="number" id="processGuardMaxRestartsPer10Min" min="1" max="20" value="4" />
+            </label>
+          </div>
+          <div class="input-grid compact">
+            <label class="field-block">
+              <span>QQ 窗口标题</span>
+              <input type="text" id="processGuardQqWindowTitle" placeholder="QQ经典农场" />
+            </label>
+            <label class="field-block">
+              <span>QQ 拉起协议</span>
+              <input type="text" id="processGuardQqLaunchProtocol" placeholder="tencent://ntqq-open/?&subCmd=miniapp&action=openQQMiniApp&actionParams=..." />
+            </label>
+            <label class="field-block">
+              <span>QQ 拉起命令</span>
+              <input type="text" id="processGuardQqLaunchCommand" placeholder='start "" "..."' />
+            </label>
+            <label class="field-block">
+              <span>动作超时(ms)</span>
+              <input type="number" id="processGuardCommandTimeoutMs" min="1000" step="1000" value="30000" />
+            </label>
+          </div>
+          <div class="input-grid compact">
+            <label class="field-block">
+              <span>微信窗口标题</span>
+              <input type="text" id="processGuardWxWindowTitle" placeholder="QQ经典农场" />
+            </label>
+            <label class="field-block">
+              <span>微信拉起命令</span>
+              <input type="text" id="processGuardWxLaunchCommand" placeholder='start "" "WeChat.exe"' />
+            </label>
+            <label class="field-block">
+              <span>微信完整重启命令</span>
+              <input type="text" id="processGuardWxRestartCommand" placeholder='仅在关窗重拉起不可用时作为兜底，例如 taskkill /IM WeChat.exe /F && start "" "WeChat.exe"' />
+            </label>
+            <label class="field-block">
+              <span>微信拉起协议</span>
+              <input type="text" id="processGuardWxLaunchProtocol" placeholder="weixin://launchapplet/?app_id=wx5306c5978fdb76e4" />
+            </label>
+          </div>
+        </article>
+      </div>
+    </section>
   </div>
 
   <button
@@ -4233,6 +4355,8 @@
       const txtRuntime = document.getElementById("txtRuntime");
       const dotGameSide = document.getElementById("dotGameSide");
       const txtGameSide = document.getElementById("txtGameSide");
+      const dotGuard = document.getElementById("dotGuard");
+      const txtGuard = document.getElementById("txtGuard");
       const selFriend = document.getElementById("selFriend");
       const iptFriendTarget = document.getElementById("iptFriendTarget");
       const iptFriendSearch = document.getElementById("iptFriendSearch");
@@ -4310,10 +4434,28 @@
       const txtCdpState = document.getElementById("txtCdpState");
       const txtInjectState = document.getElementById("txtInjectState");
       const txtRuntimeNotes = document.getElementById("txtRuntimeNotes");
+      const txtProcessGuardState = document.getElementById("txtProcessGuardState");
+      const txtProcessGuardDetail = document.getElementById("txtProcessGuardDetail");
+      const btnProcessGuardRestartCurrent = document.getElementById("btnProcessGuardRestartCurrent");
+      const processGuardEnabled = document.getElementById("processGuardEnabled");
+      const processGuardTimeoutThreshold = document.getElementById("processGuardTimeoutThreshold");
+      const processGuardMonitorIntervalMs = document.getElementById("processGuardMonitorIntervalMs");
+      const processGuardRestartPauseSec = document.getElementById("processGuardRestartPauseSec");
+      const processGuardMaxRestartsPer10Min = document.getElementById("processGuardMaxRestartsPer10Min");
+      const processGuardQqWindowTitle = document.getElementById("processGuardQqWindowTitle");
+      const processGuardQqLaunchProtocol = document.getElementById("processGuardQqLaunchProtocol");
+      const processGuardQqLaunchCommand = document.getElementById("processGuardQqLaunchCommand");
+      const processGuardWxWindowTitle = document.getElementById("processGuardWxWindowTitle");
+      const processGuardWxLaunchCommand = document.getElementById("processGuardWxLaunchCommand");
+      const processGuardWxRestartCommand = document.getElementById("processGuardWxRestartCommand");
+      const processGuardWxLaunchProtocol = document.getElementById("processGuardWxLaunchProtocol");
+      const processGuardCommandTimeoutMs = document.getElementById("processGuardCommandTimeoutMs");
       const panelAutomation = document.getElementById("panel-automation");
+      const panelRuntime = document.getElementById("panel-runtime");
       const panelWarehouse = document.getElementById("panel-warehouse");
       const panelScheduler = document.getElementById("panel-scheduler");
       const panelMessagePush = document.getElementById("panel-messagepush");
+      const panelSystem = document.getElementById("panel-system");
       const txtPreviewState = document.getElementById("txtPreviewState");
       const txtPreviewCapability = document.getElementById("txtPreviewCapability");
       const imgPreview = document.getElementById("imgPreviewMini");
@@ -4408,6 +4550,9 @@
       const messagePushServerChanSendKey = document.getElementById("messagePushServerChanSendKey");
       const messagePushPushPlusToken = document.getElementById("messagePushPushPlusToken");
       const messagePushPushPlusFormat = document.getElementById("messagePushPushPlusFormat");
+      const messagePushQmsgKey = document.getElementById("messagePushQmsgKey");
+      const messagePushQmsgType = document.getElementById("messagePushQmsgType");
+      const messagePushQmsgTarget = document.getElementById("messagePushQmsgTarget");
       const messagePushWecomWebhook = document.getElementById("messagePushWecomWebhook");
       const messagePushWecomFormat = document.getElementById("messagePushWecomFormat");
       const messagePushDingtalkWebhook = document.getElementById("messagePushDingtalkWebhook");
@@ -6511,6 +6656,56 @@
         return next;
       }
 
+      function applyProcessGuardConfigToForm(cfg) {
+        var src = cfg && typeof cfg === "object" ? cfg : {};
+        if (processGuardEnabled) processGuardEnabled.checked = !!src.enabled;
+        if (processGuardTimeoutThreshold) {
+          processGuardTimeoutThreshold.value = src.timeoutThreshold != null ? src.timeoutThreshold : 3;
+        }
+        if (processGuardMonitorIntervalMs) {
+          processGuardMonitorIntervalMs.value = src.monitorIntervalMs != null ? src.monitorIntervalMs : 3000;
+        }
+        if (processGuardRestartPauseSec) {
+          processGuardRestartPauseSec.value = src.restartPauseSec != null ? src.restartPauseSec : 15;
+        }
+        if (processGuardMaxRestartsPer10Min) {
+          processGuardMaxRestartsPer10Min.value = src.maxRestartsPer10Min != null ? src.maxRestartsPer10Min : 4;
+        }
+        if (processGuardQqWindowTitle) processGuardQqWindowTitle.value = src.qqWindowTitle || "QQ经典农场";
+        if (processGuardQqLaunchProtocol) processGuardQqLaunchProtocol.value = src.qqLaunchProtocol || "";
+        if (processGuardQqLaunchCommand) processGuardQqLaunchCommand.value = src.qqLaunchCommand || "";
+        if (processGuardWxWindowTitle) processGuardWxWindowTitle.value = src.wxWindowTitle || "QQ经典农场";
+        if (processGuardWxLaunchCommand) processGuardWxLaunchCommand.value = src.wxLaunchCommand || "";
+        if (processGuardWxRestartCommand) processGuardWxRestartCommand.value = src.wxRestartCommand || "";
+        if (processGuardWxLaunchProtocol) processGuardWxLaunchProtocol.value = src.wxLaunchProtocol || "";
+        if (processGuardCommandTimeoutMs) {
+          processGuardCommandTimeoutMs.value = src.commandTimeoutMs != null ? src.commandTimeoutMs : 30000;
+        }
+      }
+
+      function gatherProcessGuardConfig() {
+        var current = farmConfig && farmConfig.processGuard && typeof farmConfig.processGuard === "object"
+          ? farmConfig.processGuard
+          : {};
+        return {
+          enabled: !!(processGuardEnabled && processGuardEnabled.checked),
+          timeoutThreshold: Number(processGuardTimeoutThreshold && processGuardTimeoutThreshold.value || 3),
+          monitorIntervalMs: Number(processGuardMonitorIntervalMs && processGuardMonitorIntervalMs.value || 3000),
+          restartPauseSec: Number(processGuardRestartPauseSec && processGuardRestartPauseSec.value || 15),
+          maxRestartsPer10Min: Number(processGuardMaxRestartsPer10Min && processGuardMaxRestartsPer10Min.value || 4),
+          commandTimeoutMs: Number(processGuardCommandTimeoutMs && processGuardCommandTimeoutMs.value || 30000),
+          qqWindowTitle: String(processGuardQqWindowTitle && processGuardQqWindowTitle.value || "QQ经典农场").trim() || "QQ经典农场",
+          qqWindowMatchMode: current.qqWindowMatchMode || "exact",
+          qqLaunchProtocol: String(processGuardQqLaunchProtocol && processGuardQqLaunchProtocol.value || "").trim(),
+          qqLaunchCommand: String(processGuardQqLaunchCommand && processGuardQqLaunchCommand.value || "").trim(),
+          wxWindowTitle: String(processGuardWxWindowTitle && processGuardWxWindowTitle.value || "QQ经典农场").trim() || "QQ经典农场",
+          wxWindowMatchMode: current.wxWindowMatchMode || "contains",
+          wxLaunchProtocol: String(processGuardWxLaunchProtocol && processGuardWxLaunchProtocol.value || "").trim(),
+          wxLaunchCommand: String(processGuardWxLaunchCommand && processGuardWxLaunchCommand.value || "").trim(),
+          wxRestartCommand: String(processGuardWxRestartCommand && processGuardWxRestartCommand.value || "").trim(),
+        };
+      }
+
       function applyAutoFarmConfigToForm(cfg) {
         cfg = cfg || {};
         autoOwnEnabled.checked = !!cfg.autoFarmOwnEnabled;
@@ -6621,6 +6816,7 @@
         applySchedulerConfigToForm(cfg);
         applyBackendSchedulerConfigToState(cfg);
         applyMessagePushConfigToForm(cfg.messagePush);
+        applyProcessGuardConfigToForm(cfg.processGuard);
         renderMessagePushState(messagePushState, cfg.messagePush);
       }
 
@@ -7012,7 +7208,7 @@
       }
 
       function normalizeMessagePushChannelList(input) {
-        var supported = ["serverchan", "pushplus", "wecom", "dingtalk", "feishu", "telegram", "bark", "ntfy", "webhook"];
+        var supported = ["serverchan", "pushplus", "qmsg", "wecom", "dingtalk", "feishu", "telegram", "bark", "ntfy", "webhook"];
         var source = Array.isArray(input)
           ? input
           : String(input == null ? "" : input).split(/[\r\n,，;；]+/);
@@ -7056,6 +7252,7 @@
         var map = {
           serverchan: "Server酱",
           pushplus: "PushPlus",
+          qmsg: "Qmsg酱",
           wecom: "企业微信",
           dingtalk: "钉钉",
           feishu: "飞书",
@@ -7108,6 +7305,7 @@
         var panelMap = {
           serverchan: document.getElementById("messagePushPanelServerchan"),
           pushplus: document.getElementById("messagePushPanelPushplus"),
+          qmsg: document.getElementById("messagePushPanelQmsg"),
           wecom: document.getElementById("messagePushPanelWecom"),
           dingtalk: document.getElementById("messagePushPanelDingtalk"),
           feishu: document.getElementById("messagePushPanelFeishu"),
@@ -7153,6 +7351,9 @@
         if (messagePushServerChanSendKey) messagePushServerChanSendKey.value = channels.serverChanSendKey || "";
         if (messagePushPushPlusToken) messagePushPushPlusToken.value = channels.pushPlusToken || "";
         if (messagePushPushPlusFormat) messagePushPushPlusFormat.value = channelFormats.pushplus || "markdown";
+        if (messagePushQmsgKey) messagePushQmsgKey.value = channels.qmsgKey || "";
+        if (messagePushQmsgType) messagePushQmsgType.value = channels.qmsgType || "private";
+        if (messagePushQmsgTarget) messagePushQmsgTarget.value = channels.qmsgTarget || "";
         if (messagePushWecomWebhook) messagePushWecomWebhook.value = channels.wecomWebhook || "";
         if (messagePushWecomFormat) messagePushWecomFormat.value = channelFormats.wecom || "text";
         if (messagePushDingtalkWebhook) messagePushDingtalkWebhook.value = channels.dingtalkWebhook || "";
@@ -7194,6 +7395,9 @@
           channels: {
             serverChanSendKey: String(messagePushServerChanSendKey && messagePushServerChanSendKey.value || "").trim(),
             pushPlusToken: String(messagePushPushPlusToken && messagePushPushPlusToken.value || "").trim(),
+            qmsgKey: String(messagePushQmsgKey && messagePushQmsgKey.value || "").trim(),
+            qmsgType: String(messagePushQmsgType && messagePushQmsgType.value || "private").trim().toLowerCase() === "group" ? "group" : "private",
+            qmsgTarget: String(messagePushQmsgTarget && messagePushQmsgTarget.value || "").trim(),
             wecomWebhook: String(messagePushWecomWebhook && messagePushWecomWebhook.value || "").trim(),
             dingtalkWebhook: String(messagePushDingtalkWebhook && messagePushDingtalkWebhook.value || "").trim(),
             dingtalkSecret: String(messagePushDingtalkSecret && messagePushDingtalkSecret.value || "").trim(),
@@ -7217,6 +7421,7 @@
         var next = [];
         if (channels.serverChanSendKey) next.push("serverchan");
         if (channels.pushPlusToken) next.push("pushplus");
+        if (channels.qmsgKey) next.push("qmsg");
         if (channels.wecomWebhook) next.push("wecom");
         if (channels.dingtalkWebhook) next.push("dingtalk");
         if (channels.feishuWebhook) next.push("feishu");
@@ -7328,6 +7533,7 @@
           autoWarehouseSellIntervalHour: Number(iptWarehouseAutoSellInterval && iptWarehouseAutoSellInterval.value || 12),
           autoWarehouseSellCategories: getSelectedWarehouseAutoSellCategories(),
           messagePush: gatherMessagePushConfig(),
+          processGuard: gatherProcessGuardConfig(),
         }, gatherSchedulerConfig(), gatherBackendSchedulerConfig());
       }
 
@@ -7335,6 +7541,9 @@
         var src = input && typeof input === "object" ? input : {};
         var messagePush = src.messagePush && typeof src.messagePush === "object"
           ? src.messagePush
+          : {};
+        var processGuard = src.processGuard && typeof src.processGuard === "object"
+          ? src.processGuard
           : {};
         return Object.assign({
           autoFarmOwnEnabled: !!src.autoFarmOwnEnabled,
@@ -7406,12 +7615,15 @@
             logMonitorEnabled: messagePush.logMonitorEnabled !== false,
             logScanIntervalSec: Number(messagePush.logScanIntervalSec != null ? messagePush.logScanIntervalSec : 15),
             httpTimeoutMs: Number(messagePush.httpTimeoutMs != null ? messagePush.httpTimeoutMs : 10000),
-            channels: {
-              serverChanSendKey: String(messagePush.channels && messagePush.channels.serverChanSendKey || "").trim(),
-              pushPlusToken: String(messagePush.channels && messagePush.channels.pushPlusToken || "").trim(),
-              wecomWebhook: String(messagePush.channels && messagePush.channels.wecomWebhook || "").trim(),
-              dingtalkWebhook: String(messagePush.channels && messagePush.channels.dingtalkWebhook || "").trim(),
-              dingtalkSecret: String(messagePush.channels && messagePush.channels.dingtalkSecret || "").trim(),
+              channels: {
+                serverChanSendKey: String(messagePush.channels && messagePush.channels.serverChanSendKey || "").trim(),
+                pushPlusToken: String(messagePush.channels && messagePush.channels.pushPlusToken || "").trim(),
+                qmsgKey: String(messagePush.channels && messagePush.channels.qmsgKey || "").trim(),
+                qmsgType: String(messagePush.channels && messagePush.channels.qmsgType || "private").trim().toLowerCase() === "group" ? "group" : "private",
+                qmsgTarget: String(messagePush.channels && messagePush.channels.qmsgTarget || "").trim(),
+                wecomWebhook: String(messagePush.channels && messagePush.channels.wecomWebhook || "").trim(),
+                dingtalkWebhook: String(messagePush.channels && messagePush.channels.dingtalkWebhook || "").trim(),
+                dingtalkSecret: String(messagePush.channels && messagePush.channels.dingtalkSecret || "").trim(),
               feishuWebhook: String(messagePush.channels && messagePush.channels.feishuWebhook || "").trim(),
               telegramBotToken: String(messagePush.channels && messagePush.channels.telegramBotToken || "").trim(),
               telegramChatId: String(messagePush.channels && messagePush.channels.telegramChatId || "").trim(),
@@ -7423,6 +7635,23 @@
               webhookMethod: String(messagePush.channels && messagePush.channels.webhookMethod || "POST").trim().toUpperCase() || "POST",
               webhookHeaders: String(messagePush.channels && messagePush.channels.webhookHeaders || "").trim(),
             },
+          },
+          processGuard: {
+            enabled: !!processGuard.enabled,
+            timeoutThreshold: Number(processGuard.timeoutThreshold != null ? processGuard.timeoutThreshold : 3),
+            monitorIntervalMs: Number(processGuard.monitorIntervalMs != null ? processGuard.monitorIntervalMs : 3000),
+            restartPauseSec: Number(processGuard.restartPauseSec != null ? processGuard.restartPauseSec : 15),
+            maxRestartsPer10Min: Number(processGuard.maxRestartsPer10Min != null ? processGuard.maxRestartsPer10Min : 4),
+            commandTimeoutMs: Number(processGuard.commandTimeoutMs != null ? processGuard.commandTimeoutMs : 30000),
+            qqWindowTitle: String(processGuard.qqWindowTitle || "QQ经典农场").trim() || "QQ经典农场",
+            qqWindowMatchMode: String(processGuard.qqWindowMatchMode || "exact").trim().toLowerCase() || "exact",
+            qqLaunchProtocol: String(processGuard.qqLaunchProtocol || "").trim(),
+            qqLaunchCommand: String(processGuard.qqLaunchCommand || "").trim(),
+            wxWindowTitle: String(processGuard.wxWindowTitle || "QQ经典农场").trim() || "QQ经典农场",
+            wxWindowMatchMode: String(processGuard.wxWindowMatchMode || "contains").trim().toLowerCase() || "contains",
+            wxLaunchProtocol: String(processGuard.wxLaunchProtocol || "").trim(),
+            wxLaunchCommand: String(processGuard.wxLaunchCommand || "").trim(),
+            wxRestartCommand: String(processGuard.wxRestartCommand || "").trim(),
           },
         }, normalizeSchedulerConfig(src), normalizeBackendSchedulerConfig(src));
       }
@@ -8355,6 +8584,7 @@
             landDetailGrid.innerHTML = lands.map(function (item) {
               var statusTone = item.status === "mature" ? "good" : (item.status === "dead" ? "bad" : "");
               var tags = [];
+              if (item.occupiedByMultiTilePlant) tags.push('<span class="land-mini-tag">2x2占地</span>');
               if (item.needWater) tags.push('<span class="land-mini-tag warn">待浇水</span>');
               if (item.needWeed) tags.push('<span class="land-mini-tag warn">待除草</span>');
               if (item.needBug) tags.push('<span class="land-mini-tag warn">待杀虫</span>');
@@ -10311,6 +10541,32 @@
           });
       }
 
+      function restartCurrentMiniApp() {
+        var runtimeTarget = getResolvedRuntimeTarget(lastHealth);
+        return fetch("/api/process-guard/restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reason: "manual_ui_restart:" + (runtimeTarget || "unknown"),
+          }),
+        })
+          .then(readJsonResponse)
+          .then(function (j) {
+            if (!(j && j.ok && j.data)) {
+              throw new Error(j && j.error ? j.error : "手动重启失败");
+            }
+            var target = j.data && j.data.runtimeTarget ? j.data.runtimeTarget : runtimeTarget;
+            showToast("重启已触发", "当前链路: " + formatRuntimeTargetLabel(target) + "，已开始执行小游戏重启。", "ok");
+            appendLine("手动触发小游戏重启", j.data);
+            return fetchHealth();
+          })
+          .catch(function (e) {
+            var err = String(e && e.message ? e.message : e);
+            showToast("重启失败", err, "bad");
+            appendLine("手动触发小游戏重启失败", err);
+          });
+      }
+
       function sendAutoFarmAction(action, extraPayload) {
         const cfg = gatherAutoFarmConfig();
         Object.assign(farmConfig, cfg);
@@ -10490,6 +10746,49 @@
         txtRuntime.textContent = parts.join(" · ");
       }
 
+      function renderProcessGuardChip(payload) {
+        if (!payload || !payload.processGuard) {
+          setDotState(dotGuard, "warn");
+          txtGuard.textContent = "等待健康状态";
+          if (btnProcessGuardRestartCurrent) {
+            btnProcessGuardRestartCurrent.disabled = true;
+            btnProcessGuardRestartCurrent.textContent = "重启当前小程序";
+          }
+          return;
+        }
+        var guard = payload.processGuard || {};
+        var phase = String(guard.phase || "disabled");
+        var threshold = Number(guard.threshold) || 0;
+        var streak = Number(guard.timeoutStreak) || 0;
+        var runtimeTarget = guard.runtimeTarget || getResolvedRuntimeTarget(payload);
+        var state = "warn";
+        var text = "守护状态未知";
+        if (guard.enabled !== true) {
+          state = "warn";
+          text = "未启用";
+        } else if (guard.circuitOpen) {
+          state = "bad";
+          text = "已熔断";
+        } else if (phase === "restarting") {
+          state = "warn";
+          text = "小游戏重启中 · " + formatRuntimeTargetLabel(guard.runtimeTarget || getResolvedRuntimeTarget(payload));
+        } else if (phase === "degraded") {
+          state = streak >= threshold && threshold > 0 ? "bad" : "warn";
+          text = "超时累计 " + streak + "/" + threshold;
+        } else {
+          state = "ok";
+          text = "守护中 · " + streak + "/" + threshold;
+        }
+        setDotState(dotGuard, state);
+        txtGuard.textContent = text;
+        if (btnProcessGuardRestartCurrent) {
+          btnProcessGuardRestartCurrent.disabled = phase === "restarting";
+          btnProcessGuardRestartCurrent.textContent = phase === "restarting"
+            ? "正在重启 " + formatRuntimeTargetLabel(runtimeTarget)
+            : "重启当前小程序 · " + formatRuntimeTargetLabel(runtimeTarget);
+        }
+      }
+
       function renderGameSideChip(payload) {
         if (!payload) {
           setDotState(dotGameSide, "warn");
@@ -10637,6 +10936,8 @@
           logQqHost.textContent = "暂无宿主日志";
           txtCdpState.textContent = "等待 CDP 状态";
           txtRuntimeNotes.textContent = "等待运行时状态";
+          if (txtProcessGuardState) txtProcessGuardState.textContent = "等待守护状态";
+          if (txtProcessGuardDetail) txtProcessGuardDetail.textContent = "等待健康状态";
           renderInjectStatus();
           return;
         }
@@ -10656,6 +10957,42 @@
           runtimeSummary.push("CDP 错误");
         }
         txtRuntimeSummary.textContent = runtimeSummary.join(" · ");
+        if (txtProcessGuardState) {
+          var guard = payload.processGuard && typeof payload.processGuard === "object" ? payload.processGuard : null;
+          if (!guard) {
+            txtProcessGuardState.textContent = "守护状态暂不可用";
+          } else if (guard.enabled !== true) {
+            txtProcessGuardState.textContent = "进程守护未启用";
+          } else {
+            var guardSummary = [
+              "阶段 " + String(guard.phase || "unknown"),
+              "链路 " + formatRuntimeTargetLabel(guard.runtimeTarget || getResolvedRuntimeTarget(payload)),
+              "连续超时 " + (Number(guard.timeoutStreak) || 0) + "/" + (Number(guard.threshold) || 0),
+            ];
+            if (guard.lastRestartAt) {
+              guardSummary.push("最近小游戏重启 " + formatDateTime(guard.lastRestartAt));
+            }
+            if (guard.circuitOpen) {
+              guardSummary.push("已熔断");
+            }
+            txtProcessGuardState.textContent = guardSummary.join(" · ");
+          }
+          if (txtProcessGuardDetail) {
+            var detailParts = [];
+            if (guard && (guard.lastReason || guard.recentRestartReason)) {
+              detailParts.push("最近原因：" + (guard.lastReason || guard.recentRestartReason));
+            }
+            if (guard && guard.lastActionError) {
+              detailParts.push("动作错误：" + guard.lastActionError);
+            }
+            if (guard && guard.restartCountInWindow != null) {
+              detailParts.push("10 分钟重启 " + guard.restartCountInWindow + "/" + guard.maxRestartsPerWindow);
+            }
+            txtProcessGuardDetail.textContent = detailParts.length
+              ? detailParts.join(" · ")
+              : "守护已就绪，触发后仅重启小游戏并等待自动回连。";
+          }
+        }
 
         if (active) {
           const qqParts = [
@@ -10815,6 +11152,7 @@
             txtHttp.textContent = "运行中 · " + formatRuntimeUptime(j.uptimeSec);
             renderRuntimeChip(j);
             renderGameSideChip(j);
+            renderProcessGuardChip(j);
             renderRuntimePanel(j);
             renderPreviewCapability(j);
             renderPreviewState(j.preview || null, false);
@@ -10829,6 +11167,8 @@
             txtRuntime.textContent = "健康检查失败";
             setDotState(dotGameSide, "bad");
             txtGameSide.textContent = "健康检查失败";
+            setDotState(dotGuard, "bad");
+            txtGuard.textContent = "健康检查失败";
             renderRuntimePanel(null);
             renderPreviewCapability(null);
             renderInjectStatus();
@@ -11376,7 +11716,13 @@
         };
       }
 
-      [panelAutomation, panelScheduler, panelWarehouse, panelMessagePush].forEach(function (panel) {
+      if (btnProcessGuardRestartCurrent) {
+        btnProcessGuardRestartCurrent.onclick = function () {
+          restartCurrentMiniApp();
+        };
+      }
+
+      [panelAutomation, panelRuntime, panelScheduler, panelWarehouse, panelMessagePush, panelSystem].forEach(function (panel) {
         if (!panel) return;
         ["input", "change"].forEach(function (eventName) {
           panel.addEventListener(eventName, function (event) {
@@ -11976,6 +12322,7 @@
         setTextIf(".status-strip .status-chip:nth-child(2) .chip-label", "控制通道");
         setTextIf(".status-strip .status-chip:nth-child(3) .chip-label", "运行时");
         setTextIf(".status-strip .status-chip:nth-child(4) .chip-label", "游戏侧");
+        setTextIf(".status-strip .status-chip:nth-child(5) .chip-label", "进程守护");
 
         var tabs = document.querySelectorAll(".tabbar .tab-btn");
         setTextIf('.tabbar .tab-btn[data-tab="automation"]', "自动农场");
@@ -11989,6 +12336,7 @@
         setTextIf('.tabbar .tab-btn[data-tab="account"]', "账户状态");
         setTextIf('.tabbar .tab-btn[data-tab="logs"]', "日志中心");
         setTextIf('.tabbar .tab-btn[data-tab="messagepush"]', "消息推送");
+        setTextIf('.tabbar .tab-btn[data-tab="system"]', "系统配置");
 
         setTextIf("#panel-analytics .card:nth-of-type(1) h2", "作物收益分析");
         setTextIf("#panel-analytics .card:nth-of-type(1) .hint", "把经验、普肥经验、净利润和普肥净利润四类指标统一放到这里做横向比较。");
@@ -12036,6 +12384,11 @@
         setTextIf("#btnClearLog", "清空日志");
         setTextIf("#panel-messagepush .card:nth-of-type(1) h2", "消息推送");
         setTextIf("#panel-messagepush .card:nth-of-type(1) .hint", "用于推送农场异常通知和每日统计。异常通知会持续读取网关日志，连接超时累计达到阈值后触发；日报会在指定时间推送前一天的统计。");
+        setTextIf("#panel-system .card:nth-of-type(1) h2", "系统配置");
+        setTextIf("#panel-system .card:nth-of-type(1) .hint", "放置运行时无关的系统级参数。当前这里集中管理小游戏进程守护与自动恢复策略。");
+        setTextIf("#btnProcessGuardRestartCurrent", "重启当前小程序");
+        setTextIf("#panel-system .card:nth-of-type(2) h2", "进程守护");
+        setTextIf("#panel-system .card:nth-of-type(2) .hint", "连续多次小程序连接超时后，按当前链路自动重启小游戏；主项目常驻等待自动回连，微信优先复用 QQ 的关窗后重拉起逻辑，完整重启仅作兜底。");
       }
 
       function openProjectInfoModal() {
@@ -12120,6 +12473,7 @@
       setWs(false);
       renderRuntimeChip(null);
       renderGameSideChip(null);
+      renderProcessGuardChip(null);
       renderRuntimePanel(null);
       renderPreviewCapability(null);
       renderInjectStatus();
