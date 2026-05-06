@@ -6815,9 +6815,20 @@
         renderStealCropBlacklistOptions();
         applySchedulerConfigToForm(cfg);
         applyBackendSchedulerConfigToState(cfg);
-        applyMessagePushConfigToForm(cfg.messagePush);
-        applyProcessGuardConfigToForm(cfg.processGuard);
-        renderMessagePushState(messagePushState, cfg.messagePush);
+        var hasMessagePushConfig = Object.prototype.hasOwnProperty.call(cfg, "messagePush");
+        var hasProcessGuardConfig = Object.prototype.hasOwnProperty.call(cfg, "processGuard");
+        if (hasMessagePushConfig) {
+          applyMessagePushConfigToForm(cfg.messagePush);
+        }
+        if (hasProcessGuardConfig) {
+          applyProcessGuardConfigToForm(cfg.processGuard);
+        }
+        renderMessagePushState(
+          messagePushState,
+          hasMessagePushConfig
+            ? cfg.messagePush
+            : (farmConfig && farmConfig.messagePush ? farmConfig.messagePush : gatherMessagePushConfig())
+        );
       }
 
       function splitTextList(raw) {
@@ -10633,6 +10644,9 @@
                   return loadMessagePushState().catch(function () { return null; });
                 })
                 .then(function () {
+                  return fetchHealth().catch(function () { return null; });
+                })
+                .then(function () {
                   appendLine("配置已保存", farmConfig);
                   showToast("保存成功", "自动农场配置已更新，当前页面状态已同步。", "ok");
                   return j;
@@ -11141,7 +11155,7 @@
       }
 
       function fetchHealth() {
-        fetch("/api/health")
+        return fetch("/api/health")
           .then(function (r) {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.json();
