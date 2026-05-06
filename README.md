@@ -192,6 +192,7 @@ npm run qq:images
 | [`qq-host.js`](qq-host.js) | QQ 小程序内常驻宿主模板 |
 | [`run.cjs`](run.cjs) | 统一启动入口 |
 | [`start.bat`](start.bat) | Windows 一键启动入口 |
+| [`start.sh`](start.sh) | macOS 一键启动入口 |
 
 ## 图片资源约定
 
@@ -211,7 +212,7 @@ npm run qq:images
 
 ## 环境要求
 
-- Windows
+- Windows / macOS
 - Node.js `>= 22`
 - QQ 路线需要能访问 QQ 小程序本地资源文件
 - 微信路线需要可用的微信 PC 调试环境
