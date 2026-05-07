@@ -1,6 +1,5 @@
 "use strict";
 
-const fs = require("node:fs/promises");
 const path = require("node:path");
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, nativeTheme } = require("electron");
 
@@ -13,11 +12,9 @@ let statusTimer = null;
 let isQuitting = false;
 let latestSnapshot = null;
 let trayIconImage = null;
-const EMOJI_OPTIONS = ["🌾", "🥕", "🍅", "🌽", "🍀", "🐔", "🐝", "🚜", "🌻", "🍓"];
-const SESSION_EMOJI = EMOJI_OPTIONS[Math.floor(Math.random() * EMOJI_OPTIONS.length)];
-const TRAY_ICON_DIR = path.join(__dirname, "assets", "tray-icons");
+const DEFAULT_SHELL_EMOJI = "🌾";
+const TRAY_ICON_PATH = path.resolve(__dirname, "..", "gameConfig", "plant_images", "default", "400.jpg");
 const APP_USER_MODEL_ID = "qq-farm-cdp-auto.desktop-sample";
-let SESSION_TRAY_ICON_PATH = null;
 
 function runDetached(task) {
   void Promise.resolve()
@@ -25,33 +22,18 @@ function runDetached(task) {
     .catch(() => {});
 }
 
-async function pickTrayIconPath() {
-  try {
-    const files = await fs.readdir(TRAY_ICON_DIR);
-    const pngFiles = files
-      .filter((file) => /\.png$/i.test(file))
-      .map((file) => path.join(TRAY_ICON_DIR, file));
-    if (pngFiles.length > 0) {
-      return pngFiles[Math.floor(Math.random() * pngFiles.length)];
-    }
-  } catch (_) {}
-  return null;
-}
-
 function buildTrayIcon() {
   let image = null;
-  if (SESSION_TRAY_ICON_PATH) {
-    image = nativeImage.createFromPath(SESSION_TRAY_ICON_PATH);
-    if (image.isEmpty()) {
-      image = null;
-    }
+  image = nativeImage.createFromPath(TRAY_ICON_PATH);
+  if (image.isEmpty()) {
+    image = null;
   }
   if (!image) {
     image = nativeImage.createFromDataURL(
       `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
         <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
           <rect x="6" y="6" width="52" height="52" rx="18" fill="#17212d"/>
-          <text x="32" y="42" text-anchor="middle" font-size="30">${SESSION_EMOJI}</text>
+          <text x="32" y="42" text-anchor="middle" font-size="30">${DEFAULT_SHELL_EMOJI}</text>
         </svg>
       `.trim())}`,
     );
@@ -78,7 +60,7 @@ function decorateSnapshot(snapshot) {
   return {
     ...base,
     shell: {
-      emoji: SESSION_EMOJI,
+      emoji: DEFAULT_SHELL_EMOJI,
     },
   };
 }
@@ -361,7 +343,6 @@ function stopStatusLoop() {
 
 async function createTray() {
   if (hasTray()) return tray;
-  SESSION_TRAY_ICON_PATH = SESSION_TRAY_ICON_PATH || await pickTrayIconPath();
   trayIconImage = buildTrayIcon();
   tray = new Tray(trayIconImage);
   tray.on("destroyed", () => {

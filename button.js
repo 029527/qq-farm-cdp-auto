@@ -4892,6 +4892,22 @@
       || text.indexOf('网络已断开') >= 0;
   }
 
+  function isReloginPromptText(ui) {
+    if (!ui || typeof ui !== 'object') return false;
+    const text = normalizeMatchText([
+      ui.title,
+      ui.content,
+      ui.operateContent,
+      ui.okWord,
+      ui.cancelWord
+    ].filter(Boolean).join(' '));
+    if (!text) return false;
+    const hasFailure = text.indexOf('平台登录失败') >= 0
+      || text.indexOf('登录失败') >= 0
+      || text.indexOf('是否重新登录') >= 0;
+    return hasFailure && text.indexOf('重新登录') >= 0;
+  }
+
   function getReconnectPromptState(opts) {
     opts = opts || {};
     let netNode = null;
@@ -4914,7 +4930,10 @@
     const net = summarizeNetNode(netNode);
     const ui = summarizeServerKickOutUiComp(serverKickOutComp);
     const gameStateRuntime = getGameStateRuntime();
-    const promptByUi = !!(ui && isReconnectPromptText(ui.content || ui.operateContent));
+    const promptByUi = !!(ui && (
+      isReconnectPromptText(ui.content || ui.operateContent)
+      || isReloginPromptText(ui)
+    ));
     const promptByNet = !!(net && net.isPromptShowing);
     const payload = {
       ok: true,
@@ -4989,13 +5008,23 @@
     }
 
     let via = null;
-    if (serverKickOutComp && isReconnectPromptText((before.ui && before.ui.content) || (before.ui && before.ui.operateContent))) {
-      if (typeof serverKickOutComp.btnClickHandler === 'function') {
+    if (serverKickOutComp && before.ui && (
+      isReconnectPromptText(before.ui.content || before.ui.operateContent)
+      || isReloginPromptText(before.ui)
+    )) {
+      const okNode = serverKickOutComp.normalbtnOk && serverKickOutComp.normalbtnOk.node ? serverKickOutComp.normalbtnOk.node : null;
+      if (okNode) {
+        try {
+          smartClick(okNode);
+          via = isReloginPromptText(before.ui) ? 'relogin_ok_node' : 'server_kickout_ok_node';
+        } catch (_) {}
+      }
+      if (!via && typeof serverKickOutComp.btnClickHandler === 'function') {
         serverKickOutComp.btnClickHandler(null, '1');
-        via = 'server_kickout_ui_handler';
-      } else if (serverKickOutComp.operate && typeof serverKickOutComp.operate.okFunc === 'function') {
+        via = via || (isReloginPromptText(before.ui) ? 'relogin_ui_handler' : 'server_kickout_ui_handler');
+      } else if (!via && serverKickOutComp.operate && typeof serverKickOutComp.operate.okFunc === 'function') {
         serverKickOutComp.operate.okFunc();
-        via = 'server_kickout_okFunc';
+        via = via || (isReloginPromptText(before.ui) ? 'relogin_okFunc' : 'server_kickout_okFunc');
       }
     }
 

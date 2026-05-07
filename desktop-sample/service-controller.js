@@ -381,6 +381,12 @@ function buildAutoFarmSummary(health) {
   const recentEvents = Array.isArray(autoFarm.recentEvents) ? autoFarm.recentEvents : [];
   const lastEvent = recentEvents.length > 0 ? recentEvents[recentEvents.length - 1] : null;
   const todayStats = autoFarm.todayStats && typeof autoFarm.todayStats === "object" ? autoFarm.todayStats : {};
+  const friendHelpState = autoFarm.friendHelpState && typeof autoFarm.friendHelpState === "object"
+    ? autoFarm.friendHelpState
+    : {};
+  const helpCount = Number.isFinite(Number(friendHelpState.helpCount))
+    ? Number(friendHelpState.helpCount)
+    : Number(todayStats.help || 0);
 
   return {
     running: autoFarm.running === true,
@@ -393,7 +399,7 @@ function buildAutoFarmSummary(health) {
     lastEventText: lastEvent && lastEvent.message ? String(lastEvent.message) : "",
     collectCount: Number(todayStats.collect || 0),
     stealCount: Number(todayStats.steal || 0),
-    helpCount: Number(todayStats.help || 0),
+    helpCount: Math.max(0, helpCount || 0),
     schedulerEnabled: !!(autoFarm.scheduler && autoFarm.scheduler.enabled),
   };
 }
