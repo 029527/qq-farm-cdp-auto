@@ -73,7 +73,7 @@ if not exist "node_modules\\electron" (
 
 echo.
 echo [INFO] Launching lite floating window...
-call npm run desktop:sample
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "& { Start-Process -FilePath 'cmd.exe' -ArgumentList '/d','/s','/c','npm run desktop:sample' -WindowStyle Hidden }"
 if errorlevel 1 (
     echo.
     pause
@@ -81,3 +81,4 @@ if errorlevel 1 (
 )
 
 endlocal
+exit /b 0

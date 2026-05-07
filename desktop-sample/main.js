@@ -10,6 +10,7 @@ let settingsWindow = null;
 let tray = null;
 let statusTimer = null;
 let isQuitting = false;
+let quitCleanupStarted = false;
 let latestSnapshot = null;
 let trayIconImage = null;
 const DEFAULT_SHELL_EMOJI = "🌾";
@@ -434,8 +435,18 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   isQuitting = true;
+  if (quitCleanupStarted) {
+    return;
+  }
+  event.preventDefault();
+  quitCleanupStarted = true;
+  isQuitting = true;
+  runDetached(async () => {
+    await serviceController.stopService().catch(() => {});
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", (event) => {

@@ -233,6 +233,23 @@ async function killProcessTree(pid) {
   }
 }
 
+function isKnownMissingProcessError(error) {
+  const detail = String(error && (error.stderr || error.stdout || error.message) || "").toLowerCase();
+  return detail.includes("not found") || detail.includes("没有运行的实例") || detail.includes("不存在");
+}
+
+async function collectServiceCandidates(port, serviceState) {
+  const candidates = [];
+  if (serviceState && serviceState.pid) {
+    candidates.push(Number(serviceState.pid));
+  }
+  const listeningPid = await findListeningPid(port);
+  if (listeningPid) {
+    candidates.push(listeningPid);
+  }
+  return [...new Set(candidates.filter((pid) => Number.isInteger(pid) && pid > 0))];
+}
+
 async function waitForHealthState(targetRunning, timeoutMs) {
   const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 0);
   let lastHealth = null;
@@ -599,25 +616,40 @@ async function startService(runtimeKey) {
 async function stopService() {
   const gateway = getGatewayConfig();
   const serviceState = await readServiceState();
-  const candidates = [];
+  const deadline = Date.now() + 15000;
+  const killed = new Set();
 
-  if (serviceState && serviceState.pid) {
-    candidates.push(Number(serviceState.pid));
+  while (Date.now() < deadline) {
+    const health = await fetchHealthSnapshot();
+    const candidates = await collectServiceCandidates(gateway.port, serviceState);
+
+    for (const pid of candidates) {
+      if (killed.has(pid)) continue;
+      try {
+        await killProcessTree(pid);
+      } catch (error) {
+        if (!isKnownMissingProcessError(error)) {
+          throw error;
+        }
+      }
+      killed.add(pid);
+    }
+
+    const listeningPid = await findListeningPid(gateway.port);
+    if (!health && !listeningPid) {
+      await removeServiceState();
+      return getSnapshot();
+    }
+
+    await delay(500);
   }
 
-  const listeningPid = await findListeningPid(gateway.port);
-  if (listeningPid && !candidates.includes(listeningPid)) {
-    candidates.push(listeningPid);
+  const finalHealth = await fetchHealthSnapshot();
+  const finalPid = await findListeningPid(gateway.port);
+  if (finalHealth || finalPid) {
+    throw new Error(`停止服务失败：端口 ${gateway.port} 仍被占用`);
   }
 
-  for (const pid of candidates) {
-    if (!pid) continue;
-    try {
-      await killProcessTree(pid);
-    } catch (_) {}
-  }
-
-  await waitForHealthState(false, 10000);
   await removeServiceState();
   return getSnapshot();
 }
