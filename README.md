@@ -41,7 +41,7 @@
 
 1. 安装 Node.js 22 或更高版本
 2. 把项目放到本地任意目录
-3. Windows 双击运行 `Windows_start.bat`；macOS 可执行 `./Mac_start.sh`
+3. Windows 双击运行 `Windows_start.bat`；macOS 先执行 `chmod +x ./Mac_start.sh`，再执行 `./Mac_start.sh`
 4. 按提示选择 `普通启动 / Lite 悬浮窗`，以及普通启动下的 `QQ / 微信`
 5. 等浏览器自动打开控制页
 
