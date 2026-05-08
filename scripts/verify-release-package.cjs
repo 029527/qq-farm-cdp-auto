@@ -10,7 +10,9 @@ const targetArg = process.argv[2] ? path.resolve(process.argv[2]) : projectRoot;
 
 const REQUIRED_PATHS = [
   "run.cjs",
-  "start.bat",
+  "scripts/start-entry.cjs",
+  "Windows_start.bat",
+  "Mac_start.sh",
   "public/index.html",
   "src/game-config.js",
   "src/plant-analytics.js",
