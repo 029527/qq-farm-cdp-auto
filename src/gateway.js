@@ -827,25 +827,26 @@ function getDefaultPlantImagePath() {
 
 function buildPlantImageUrl(seedId, options = {}) {
   const normalized = Number(seedId) || 0;
+  const params = new URLSearchParams();
   if (normalized > 0) {
-    const params = new URLSearchParams();
     params.set("seedId", String(normalized));
-    const plantName = String(options.plantName || "").trim();
-    if (plantName) {
-      params.set("plantName", plantName);
-    }
-    return `/api/plant-image?${params.toString()}`;
   }
+  const plantName = String(options.plantName || "").trim();
+  if (plantName) {
+    params.set("plantName", plantName);
+  }
+  if (params.toString()) return `/api/plant-image?${params.toString()}`;
   return getDefaultPlantImagePath() ? DEFAULT_PLANT_IMAGE_URL : null;
 }
 
 function buildPlantStageImageUrl(seedId, stageOptions) {
   const normalized = Number(seedId) || 0;
-  if (normalized <= 0) return buildPlantImageUrl(seedId, stageOptions);
   const options = stageOptions && typeof stageOptions === "object" ? stageOptions : {};
   const params = new URLSearchParams();
-  params.set("seedId", String(normalized));
   const plantName = String(options.plantName || "").trim();
+  if (normalized > 0) {
+    params.set("seedId", String(normalized));
+  }
   if (plantName) {
     params.set("plantName", plantName);
   }
@@ -856,6 +857,9 @@ function buildPlantStageImageUrl(seedId, stageOptions) {
   const phaseName = String(options.phaseName || "").trim();
   if (phaseName) {
     params.set("phaseName", phaseName);
+  }
+  if (!params.has("seedId") && !params.has("plantName")) {
+    return buildPlantImageUrl(seedId, stageOptions);
   }
   return `/api/plant-image?${params.toString()}`;
 }
@@ -1190,7 +1194,12 @@ function normalizeLandDetail(raw, index) {
   const plantId = Number(resolvedPlantConfig && resolvedPlantConfig.id) || explicitPlantId || runtimePlantId || 0;
   const plantConfig = resolvedPlantConfig;
   const plantName = item.plantName || (runtime && runtime.config && runtime.config.name) || (plantConfig && plantConfig.name) || null;
-  const seedId = Number(plantConfig && plantConfig.seed_id) || 0;
+  const runtimeSeedId =
+    Number(item.seedId) ||
+    Number(plantData && (plantData.seed_id || plantData.seedId || plantData.cfgId || plantData.cfg_id)) ||
+    Number(runtime && runtime.config && (runtime.config.seed_id || runtime.config.seedId || runtime.config.cfgId || runtime.config.cfg_id)) ||
+    0;
+  const seedId = Number(plantConfig && plantConfig.seed_id) || runtimeSeedId || 0;
   const totalSeason = Math.max(1, Number(item.totalSeason) || Number(plantConfig && plantConfig.seasons) || 1);
   const currentSeason = plantId > 0
     ? Math.max(1, Math.min(totalSeason, Number(item.currentSeason) || 1))

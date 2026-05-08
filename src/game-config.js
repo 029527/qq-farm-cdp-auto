@@ -419,8 +419,7 @@ function formatGrowTime(seconds) {
 function getSeedImagePathBySeedId(seedId, options = {}) {
   ensureLoaded();
   const targetId = Number(seedId) || 0;
-  if (targetId <= 0) return null;
-  const plant = getPlantBySeedId(targetId);
+  const plant = targetId > 0 ? getPlantBySeedId(targetId) : null;
   const names = collectLookupNames(options.plantName, plant && plant.name);
   if (names.length === 0) return null;
   const stageEntries = getCropStageEntriesByNames(names);
