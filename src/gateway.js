@@ -100,6 +100,50 @@ const DEFAULT_PLANT_IMAGE_URL = "/api/default-plant-image";
 const DEFAULT_PLANT_IMAGE_PATH = path.join(__dirname, "..", "gameConfig", "plant_images", "default", "400.jpg");
 const UI_SCHEDULER_TASK_IDS = ["health", "autoFarm", "rewardPopup", "lands", "account"];
 const WAREHOUSE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const UI_READ_CACHE_TTL_MS = Object.freeze({
+  lands: 1_500,
+  playerProfile: 5_000,
+  seedAvailability: 5_000,
+  analytics: 2_000,
+  backpackSeedOptions: 5_000,
+});
+const GAME_CTL_READ_CACHE_TTL_MS = Object.freeze({
+  "host.describe": 1_000,
+  "gameCtl.getFarmOwnership": 1_500,
+  "gameCtl.getFarmStatus": 1_200,
+  "gameCtl.getPlayerProfile": 5_000,
+  "gameCtl.scanSystemAccountCandidates": 10_000,
+  "gameCtl.getSeedList": 5_000,
+  "gameCtl.getShopGoodsList": 5_000,
+  "gameCtl.getShopSeedList": 5_000,
+  "gameCtl.getWarehouseItems": 2_000,
+  "gameCtl.getRewardPopupInterceptorState": 1_500,
+});
+const GAME_CTL_MUTATING_PATHS = new Set([
+  "gameCtl.enterOwnFarm",
+  "gameCtl.enterFriendFarm",
+  "gameCtl.triggerOneClickOperation",
+  "gameCtl.clickMatureEffect",
+  "gameCtl.dismissRewardPopup",
+  "gameCtl.dismissActiveOverlay",
+  "gameCtl.hideGetRewardsPopup",
+  "gameCtl.setRewardPopupInterceptorEnabled",
+  "gameCtl.startRewardPopupInterceptor",
+  "gameCtl.stopRewardPopupInterceptor",
+  "gameCtl.autoReconnectIfNeeded",
+  "gameCtl.startReconnectWatcher",
+  "gameCtl.stopReconnectWatcher",
+  "gameCtl.autoPlant",
+  "gameCtl.fertilizeLand",
+  "gameCtl.fertilizeLandsBatch",
+  "gameCtl.openLandInteraction",
+  "gameCtl.closePlantInteractionUi",
+  "gameCtl.requestShopData",
+  "gameCtl.openWarehouseUi",
+  "gameCtl.closeWarehouseUi",
+  "gameCtl.refreshWarehouseSnapshot",
+  "gameCtl.sellWarehouseItems",
+]);
 const WAREHOUSE_AUTO_SELL_DEFAULT_HOURS = 12;
 const WAREHOUSE_SELL_CATEGORY_OPTIONS = ["fruit", "seed", "tool", "material"];
 const WAREHOUSE_AUTOFARM_WAIT_TIMEOUT_MS = 90 * 1000;
@@ -109,6 +153,51 @@ const WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS = new Set([
   1006, 1007, 1008, 1009, 1010,
   1016, 1017,
 ]);
+
+const uiReadCache = new Map();
+
+function cloneCacheValue(value) {
+  try {
+    return structuredClone(value);
+  } catch (_) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return value;
+    }
+  }
+}
+
+function getUiReadCache(key) {
+  const entry = uiReadCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    uiReadCache.delete(key);
+    return null;
+  }
+  return cloneCacheValue(entry.value);
+}
+
+function setUiReadCache(key, ttlMs, value) {
+  if (!key || !Number.isFinite(ttlMs) || ttlMs <= 0) return value;
+  uiReadCache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    value: cloneCacheValue(value),
+  });
+  return value;
+}
+
+function clearUiReadCache(prefix) {
+  if (!prefix) {
+    uiReadCache.clear();
+    return;
+  }
+  for (const key of uiReadCache.keys()) {
+    if (String(key).startsWith(String(prefix))) {
+      uiReadCache.delete(key);
+    }
+  }
+}
 
 function buildDefaultUiSchedulerTasks() {
   return {
@@ -441,6 +530,18 @@ function autoFertilizerStatePath() {
   return path.join(__dirname, "..", "data", "auto-fertilizer-state.json");
 }
 
+function rewardPopupInterceptorPreferencePath() {
+  return path.join(__dirname, "..", "data", "reward-popup-interceptor-state.json");
+}
+
+function normalizeRewardPopupInterceptorPreference(input) {
+  const src = input && typeof input === "object" ? input : {};
+  return {
+    enabled: src.enabled === true,
+    updatedAt: typeof src.updatedAt === "string" && src.updatedAt ? src.updatedAt : new Date().toISOString(),
+  };
+}
+
 function normalizeFriendTaskMaxFriends(value, defaultValue, min, max) {
   const n = Number.parseInt(String(value ?? ""), 10);
   const fallback = Number.isFinite(n) ? n : defaultValue;
@@ -587,6 +688,36 @@ async function loadAutoFertilizerState() {
     await fs.writeFile(autoFertilizerStatePath(), JSON.stringify(empty, null, 2), "utf8");
     return empty;
   }
+}
+
+async function loadRewardPopupInterceptorPreference() {
+  const dir = path.join(__dirname, "..", "data");
+  await fs.mkdir(dir, { recursive: true });
+  try {
+    const raw = await fs.readFile(rewardPopupInterceptorPreferencePath(), "utf8");
+    const parsed = JSON.parse(raw);
+    const normalized = normalizeRewardPopupInterceptorPreference(parsed);
+    const normalizedText = JSON.stringify(normalized, null, 2);
+    if (raw.trim() !== normalizedText.trim()) {
+      await fs.writeFile(rewardPopupInterceptorPreferencePath(), normalizedText, "utf8");
+    }
+    return normalized;
+  } catch (_) {
+    const empty = normalizeRewardPopupInterceptorPreference({ enabled: false });
+    await fs.writeFile(rewardPopupInterceptorPreferencePath(), JSON.stringify(empty, null, 2), "utf8");
+    return empty;
+  }
+}
+
+async function saveRewardPopupInterceptorPreference(input) {
+  const dir = path.join(__dirname, "..", "data");
+  const next = normalizeRewardPopupInterceptorPreference({
+    ...(input && typeof input === "object" ? input : {}),
+    updatedAt: new Date().toISOString(),
+  });
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(rewardPopupInterceptorPreferencePath(), JSON.stringify(next, null, 2), "utf8");
+  return next;
 }
 
 async function loadFriendHelpState() {
@@ -1398,6 +1529,8 @@ function assessLandTypeInspection(inspection, expectedLandId) {
 }
 
 async function fetchLandDetailsForUi({ ensureAutomationSession, ensureAutomationGameCtl, callAutomationGameCtl }) {
+  const cached = getUiReadCache("lands:default");
+  if (cached) return cached;
   const session = await ensureAutomationSession();
   await ensureAutomationGameCtl(session);
   const status = await callAutomationGameCtl(session, "gameCtl.getFarmStatus", [{
@@ -1412,7 +1545,7 @@ async function fetchLandDetailsForUi({ ensureAutomationSession, ensureAutomation
     .filter((item) => item && item.landId != null)
     .map((item, index) => normalizeLandDetail(item, index))
     .sort((a, b) => (Number(a.landId) || 0) - (Number(b.landId) || 0));
-  return {
+  return setUiReadCache("lands:default", UI_READ_CACHE_TTL_MS.lands, {
     farmType: status && status.farmType ? status.farmType : null,
     totalGrids: Number(status && status.totalGrids) || lands.length,
     stageCounts: status && status.stageCounts ? status.stageCounts : null,
@@ -1426,7 +1559,7 @@ async function fetchLandDetailsForUi({ ensureAutomationSession, ensureAutomation
     },
     lands,
     updatedAt: Date.now(),
-  };
+  });
 }
 
 async function fetchLandDetailsDebugForUi({ ensureAutomationSession, ensureAutomationGameCtl, callAutomationGameCtl }) {
@@ -1631,15 +1764,17 @@ function pickBackpackPreview(seedList, prioritySeedIds) {
 }
 
 async function fetchSeedAvailabilityForUi({ ensureAutomationSession, ensureAutomationGameCtl, callAutomationGameCtl }) {
+  const cached = getUiReadCache("seedAvailability:default");
+  if (cached) return cached;
   const session = await ensureAutomationSession();
   await ensureAutomationGameCtl(session);
   const seedList = await callAutomationGameCtl(session, "gameCtl.getSeedList", [{ sortMode: 3, silent: true }]);
   await callAutomationGameCtl(session, "gameCtl.requestShopData", [2]);
   const shopList = await callAutomationGameCtl(session, "gameCtl.getShopSeedList", [{ sortByLevel: true, silent: true }]);
-  return {
+  return setUiReadCache("seedAvailability:default", UI_READ_CACHE_TTL_MS.seedAvailability, {
     seedList: Array.isArray(seedList) ? seedList : [],
     shopList: Array.isArray(shopList) ? shopList : [],
-  };
+  });
 }
 
 function pickPlantPreviewFromRankings(mode, rankings, availability) {
@@ -1717,6 +1852,10 @@ async function fetchFriendListForUi({ ensureAutomationSession, ensureAutomationG
 }
 
 async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomationGameCtl, callAutomationGameCtl, config, getQqWsSnapshot, profileCache }) {
+  const now = Date.now();
+  if (profileCache && typeof profileCache === "object" && profileCache.profile && profileCache.updatedAt && now - profileCache.updatedAt < UI_READ_CACHE_TTL_MS.playerProfile) {
+    return cloneCacheValue(profileCache.profile);
+  }
   const memoryCachedProfile = loadUsableMemoryCachedPlayerProfile(profileCache);
   const startupCachedProfile = memoryCachedProfile || await loadUsableCachedPlayerProfile(null);
 
@@ -1790,6 +1929,7 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
     profileCache.clientKey = clientKey;
     profileCache.profile = null;
     profileCache.lockedGid = null;
+    profileCache.updatedAt = 0;
   }
 
   if (currentProfile && isTrustedResolvedProfile(currentProfile, excludedGidSet)) {
@@ -1804,6 +1944,7 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
       (profileCache.lockedGid == null && Number(profileCache.profile.gid) === Number(currentProfile.gid || 0))
     ) {
       profileCache.profile = { ...currentProfile };
+      profileCache.updatedAt = Date.now();
       await persistUsablePlayerProfile(currentProfile);
       return currentProfile;
     }
@@ -1811,6 +1952,7 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
     if (profileCache.lockedGid != null && currentGid != null && currentGid !== profileCache.lockedGid) {
       const sticky = buildProfileAssetOverlay(profileCache.profile, currentProfile);
       const decorated = decoratePlayerProfile({ ...sticky, _source: "locked_gid_profile+runtime_assets" });
+      profileCache.updatedAt = Date.now();
       await persistUsablePlayerProfile(decorated);
       return decorated;
     }
@@ -1821,11 +1963,13 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
     ) {
       const sticky = buildProfileAssetOverlay(profileCache.profile, currentProfile);
       const decorated = decoratePlayerProfile({ ...sticky, _source: "sticky_profile+runtime_assets" });
+      profileCache.updatedAt = Date.now();
       await persistUsablePlayerProfile(decorated);
       return decorated;
     }
 
     profileCache.profile = { ...currentProfile };
+    profileCache.updatedAt = Date.now();
     await persistUsablePlayerProfile(currentProfile);
     return currentProfile;
   }
@@ -1833,6 +1977,7 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
   if (currentProfile && hasStableProfileIdentity(currentProfile) && profileCache.profile) {
     const sticky = buildProfileAssetOverlay(profileCache.profile, currentProfile);
     const decorated = decoratePlayerProfile({ ...sticky, _source: "sticky_profile+runtime_assets" });
+    profileCache.updatedAt = Date.now();
     await persistUsablePlayerProfile(decorated);
     return decorated;
   }
@@ -1840,12 +1985,14 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
   if (profileCache.profile) {
     const sticky = buildProfileAssetOverlay(profileCache.profile, currentProfile);
     const decorated = decoratePlayerProfile({ ...sticky, _source: "sticky_profile+runtime_assets" });
+    profileCache.updatedAt = Date.now();
     await persistUsablePlayerProfile(decorated);
     return decorated;
   }
 
   if (diskCachedProfile && (!currentProfile || !hasUsableProfileLevel(currentProfile))) {
     profileCache.profile = { ...diskCachedProfile };
+    profileCache.updatedAt = Date.now();
     if (profileCache.lockedGid == null && Number(diskCachedProfile.gid) > 0) {
       profileCache.lockedGid = Number(diskCachedProfile.gid);
     }
@@ -1859,6 +2006,7 @@ async function fetchPlayerProfileForUi({ ensureAutomationSession, ensureAutomati
 
   if (diskCachedProfile) {
     profileCache.profile = { ...diskCachedProfile };
+    profileCache.updatedAt = Date.now();
     if (profileCache.lockedGid == null && Number(diskCachedProfile.gid) > 0) {
       profileCache.lockedGid = Number(diskCachedProfile.gid);
     }
@@ -2334,6 +2482,145 @@ function createGateway(config) {
     return session === qqWsSession;
   }
 
+  const gameCtlReadCache = new Map();
+  const runtimeRpcStats = {
+    total: 0,
+    success: 0,
+    failed: 0,
+    cacheHit: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+    byPath: Object.create(null),
+    slowRecent: [],
+  };
+
+  function recordRuntimeRpc(pathName, durationMs, ok, detail = {}) {
+    const pathKey = String(pathName || "unknown");
+    const elapsed = Math.max(0, Number(durationMs) || 0);
+    const cached = detail && detail.cached === true;
+    runtimeRpcStats.total += 1;
+    if (ok) runtimeRpcStats.success += 1;
+    else runtimeRpcStats.failed += 1;
+    if (cached) runtimeRpcStats.cacheHit += 1;
+    runtimeRpcStats.totalDurationMs += elapsed;
+    runtimeRpcStats.maxDurationMs = Math.max(runtimeRpcStats.maxDurationMs, elapsed);
+    if (!runtimeRpcStats.byPath[pathKey]) {
+      runtimeRpcStats.byPath[pathKey] = {
+        path: pathKey,
+        total: 0,
+        success: 0,
+        failed: 0,
+        cacheHit: 0,
+        totalDurationMs: 0,
+        maxDurationMs: 0,
+        lastDurationMs: 0,
+        lastAt: null,
+        lastError: null,
+      };
+    }
+    const item = runtimeRpcStats.byPath[pathKey];
+    item.total += 1;
+    if (ok) item.success += 1;
+    else item.failed += 1;
+    if (cached) item.cacheHit += 1;
+    item.totalDurationMs += elapsed;
+    item.maxDurationMs = Math.max(item.maxDurationMs, elapsed);
+    item.lastDurationMs = elapsed;
+    item.lastAt = new Date().toISOString();
+    item.lastError = ok ? null : String(detail && detail.error ? detail.error : "unknown_error");
+    if (elapsed >= 500 || !ok) {
+      runtimeRpcStats.slowRecent.push({
+        at: item.lastAt,
+        path: pathKey,
+        durationMs: elapsed,
+        ok: !!ok,
+        cached,
+        error: ok ? null : item.lastError,
+      });
+      if (runtimeRpcStats.slowRecent.length > 30) {
+        runtimeRpcStats.slowRecent.splice(0, runtimeRpcStats.slowRecent.length - 30);
+      }
+    }
+  }
+
+  function getRuntimeRpcStatsSnapshot() {
+    const byPath = Object.values(runtimeRpcStats.byPath)
+      .map((item) => ({
+        ...item,
+        avgDurationMs: item.total > 0 ? Math.round(item.totalDurationMs / item.total) : 0,
+      }))
+      .sort((a, b) => {
+        if (b.totalDurationMs !== a.totalDurationMs) return b.totalDurationMs - a.totalDurationMs;
+        return b.maxDurationMs - a.maxDurationMs;
+      })
+      .slice(0, 20);
+    return {
+      total: runtimeRpcStats.total,
+      success: runtimeRpcStats.success,
+      failed: runtimeRpcStats.failed,
+      cacheHit: runtimeRpcStats.cacheHit,
+      avgDurationMs: runtimeRpcStats.total > 0
+        ? Math.round(runtimeRpcStats.totalDurationMs / runtimeRpcStats.total)
+        : 0,
+      maxDurationMs: Math.round(runtimeRpcStats.maxDurationMs),
+      byPath,
+      slowRecent: runtimeRpcStats.slowRecent.slice(-30),
+    };
+  }
+
+  function cloneCachedValue(value) {
+    try {
+      return structuredClone(value);
+    } catch (_) {
+      try {
+        return JSON.parse(JSON.stringify(value));
+      } catch (_) {
+        return value;
+      }
+    }
+  }
+
+  function getGameCtlReadCacheTtl(pathName, args, callOptions) {
+    const options = callOptions && typeof callOptions === "object" ? callOptions : {};
+    if (options.cache === false || options.noCache === true) return 0;
+    const firstArg = Array.isArray(args) && args[0] && typeof args[0] === "object" ? args[0] : null;
+    if (firstArg && (firstArg.noCache === true || firstArg.forceRefresh === true || firstArg.refresh === true)) return 0;
+    const key = String(pathName || "");
+    if (key === "gameCtl.getFriendList") {
+      return firstArg && firstArg.refresh === false ? 5_000 : 0;
+    }
+    return GAME_CTL_READ_CACHE_TTL_MS[key] || 0;
+  }
+
+  function makeGameCtlReadCacheKey(session, pathName, args) {
+    const sessionKey = isQqRuntimeSession(session) ? "qq_ws" : "cdp";
+    try {
+      return `${sessionKey}:${pathName}:${JSON.stringify(Array.isArray(args) ? args : [])}`;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function clearGameCtlReadCache(reason) {
+    if (gameCtlReadCache.size > 0) {
+      gameCtlReadCache.clear();
+    }
+    clearUiReadCache("lands:");
+    clearUiReadCache("playerProfile:");
+    clearUiReadCache("analytics:");
+    clearUiReadCache("seedAvailability:");
+    clearUiReadCache("backpackSeedOptions:");
+    if (reason && process.env.FARM_DEBUG_RPC_CACHE) {
+      console.log(`[gateway][rpc-cache] cleared: ${reason}`);
+    }
+  }
+
+  async function callAutomationGameCtlUncached(session, pathName, args, callOptions) {
+    return isQqRuntimeSession(session)
+      ? await qqWsSession.call(pathName, args, callOptions)
+      : await callGameCtl(session, pathName, args, callOptions);
+  }
+
   async function ensureAutomationGameCtl(session) {
     try {
       const result = isQqRuntimeSession(session)
@@ -2350,13 +2637,35 @@ function createGateway(config) {
   }
 
   async function callAutomationGameCtl(session, pathName, args, callOptions) {
+    const pathKey = String(pathName || "");
+    const ttlMs = getGameCtlReadCacheTtl(pathKey, args, callOptions);
+    const cacheKey = ttlMs > 0 ? makeGameCtlReadCacheKey(session, pathKey, args) : "";
+    if (cacheKey) {
+      const cached = gameCtlReadCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        recordRuntimeRpc(pathKey, 0, true, { cached: true });
+        if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
+        return cloneCachedValue(cached.value);
+      }
+      if (cached) gameCtlReadCache.delete(cacheKey);
+    }
+
     try {
-      const result = isQqRuntimeSession(session)
-        ? await qqWsSession.call(pathName, args, callOptions)
-        : await callGameCtl(session, pathName, args, callOptions);
+      const startedAt = Date.now();
+      const result = await callAutomationGameCtlUncached(session, pathKey, args, callOptions);
+      recordRuntimeRpc(pathKey, Date.now() - startedAt, true);
+      if (cacheKey) {
+        gameCtlReadCache.set(cacheKey, {
+          expiresAt: Date.now() + ttlMs,
+          value: cloneCachedValue(result),
+        });
+      } else if (GAME_CTL_MUTATING_PATHS.has(pathKey)) {
+        clearGameCtlReadCache(pathKey);
+      }
       if (processGuard) processGuard.noteHealthy({ snapshot: getAutomationTransportState() });
       return result;
     } catch (error) {
+      recordRuntimeRpc(pathKey, 0, false, { error: error instanceof Error ? error.message : String(error) });
       if (processGuard) {
         processGuard.noteRuntimeError(error, { snapshot: getAutomationTransportState() });
       }
@@ -2375,6 +2684,7 @@ function createGateway(config) {
       resolvedTarget: resolveAutomationRuntimeTarget(),
       cdp: getCdpSnapshot(),
       qqWs: getQqWsSnapshot(),
+      rpcStats: getRuntimeRpcStatsSnapshot(),
     };
   }
 
@@ -2383,9 +2693,12 @@ function createGateway(config) {
   function getQqBundleSnapshot(options = {}) {
     let snapshot = null;
     try {
-      snapshot = buildQqBundle({ config, projectRoot }).meta;
+      snapshot = buildQqBundle({ config, projectRoot, bundleMode: options.bundleMode }).meta;
     } catch (_) {
-      snapshot = getQqBundleState(config);
+      snapshot = getQqBundleState({
+        ...config,
+        qqBundleMode: options.bundleMode || config.qqBundleMode,
+      });
     }
     const target = resolveQqPatchTarget({
       targetPath: options.targetPath,
@@ -2448,8 +2761,27 @@ function createGateway(config) {
     return status;
   }
 
+  function attachRewardPopupInterceptorPreference(status, preference) {
+    const normalized = normalizeRewardPopupInterceptorPreference(preference);
+    status.configuredEnabled = normalized.enabled;
+    status.preference = normalized;
+    return status;
+  }
+
+  function classifyCdpRewardPopupInterceptorError(message) {
+    const text = String(message || "");
+    if (/getRewardPopupInterceptorState|setRewardPopupInterceptorEnabled|call path not found|not a function|仍不可用|missing methods/i.test(text)) {
+      return "runtime_missing_method";
+    }
+    if (/ECONN|connect|WebSocket|socket|closed|not connected|timeout|Target|execution context|Runtime\.evaluate/i.test(text)) {
+      return "runtime_not_ready";
+    }
+    return "runtime_state_failed";
+  }
+
   async function inspectRewardPopupInterceptorForUi(options = {}) {
     const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 4000);
+    const preference = options.preference || await loadRewardPopupInterceptorPreference();
     const resolvedTarget = resolveAutomationRuntimeTarget();
     const bundle = resolvedTarget === "qq_ws" ? getQqBundleSnapshot() : null;
     const sync = bundle && bundle.sync ? bundle.sync : null;
@@ -2466,84 +2798,125 @@ function createGateway(config) {
       error: null,
       missingMethods: [],
     };
+    attachRewardPopupInterceptorPreference(payload, preference);
 
-    if (resolvedTarget !== "qq_ws") {
-      payload.reason = "runtime_not_qq_ws";
-      payload.note = "仅 QQ WS 运行时支持奖励弹窗拦截开关";
-      return payload;
-    }
+    if (resolvedTarget === "qq_ws") {
+      if (!qqWsSession.isReady()) {
+        payload.reason = "runtime_not_ready";
+        payload.note = "QQ 宿主尚未就绪";
+        return payload;
+      }
 
-    if (!qqWsSession.isReady()) {
-      payload.reason = "runtime_not_ready";
-      payload.note = "QQ 宿主尚未就绪";
-      return payload;
-    }
+      if (sync && sync.runtimeScriptHash && sync.expectedScriptHash && !sync.inSync) {
+        payload.reason = "runtime_not_synced";
+        payload.note = "当前 QQ runtime 尚未加载最新补丁";
+        return payload;
+      }
 
-    if (sync && sync.runtimeScriptHash && sync.expectedScriptHash && !sync.inSync) {
-      payload.reason = "runtime_not_synced";
-      payload.note = "当前 QQ runtime 尚未加载最新补丁";
-      return payload;
-    }
+      let describe = null;
+      try {
+        describe = await qqWsSession.call("host.describe", [], { timeoutMs });
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        payload.reason = "runtime_describe_failed";
+        payload.error = err.message;
+        payload.note = "读取 QQ 宿主方法列表失败";
+        return payload;
+      }
 
-    let describe = null;
-    try {
-      describe = await qqWsSession.call("host.describe", [], { timeoutMs });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      payload.reason = "runtime_describe_failed";
-      payload.error = err.message;
-      payload.note = "读取 QQ 宿主方法列表失败";
-      return payload;
-    }
+      payload.runtimeReady = !!(describe && describe.gameCtlReady);
+      if (describe && typeof describe.scriptHash === "string") {
+        payload.scriptHash = describe.scriptHash;
+      }
 
-    payload.runtimeReady = !!(describe && describe.gameCtlReady);
-    if (describe && typeof describe.scriptHash === "string") {
-      payload.scriptHash = describe.scriptHash;
-    }
-
-    const availableMethods = Array.isArray(describe && describe.availableMethods) ? describe.availableMethods : [];
-    const requiredMethods = [
-      "gameCtl.getRewardPopupInterceptorState",
-      "gameCtl.setRewardPopupInterceptorEnabled",
-    ];
-    payload.missingMethods = requiredMethods.filter((name) => !availableMethods.includes(name));
-
-    if (!payload.runtimeReady) {
-      payload.reason = "runtime_not_ready";
-      payload.note = "gameCtl 尚未 ready";
-      return payload;
-    }
-
-    if (payload.missingMethods.length > 0) {
-      payload.reason = "runtime_missing_method";
-      payload.note = "当前 runtime 未暴露奖励弹窗拦截方法";
-      return payload;
-    }
-
-    try {
-      const state = await qqWsSession.call(
+      const availableMethods = Array.isArray(describe && describe.availableMethods) ? describe.availableMethods : [];
+      const requiredMethods = [
         "gameCtl.getRewardPopupInterceptorState",
-        [{ silent: true }],
-        { timeoutMs },
+        "gameCtl.setRewardPopupInterceptorEnabled",
+      ];
+      payload.missingMethods = requiredMethods.filter((name) => !availableMethods.includes(name));
+
+      if (!payload.runtimeReady) {
+        payload.reason = "runtime_not_ready";
+        payload.note = "gameCtl 尚未 ready";
+        return payload;
+      }
+
+      if (payload.missingMethods.length > 0) {
+        payload.reason = "runtime_missing_method";
+        payload.note = "当前 runtime 未暴露奖励弹窗拦截方法";
+        return payload;
+      }
+
+      try {
+        let state = await qqWsSession.call(
+          "gameCtl.getRewardPopupInterceptorState",
+          [{ silent: true, noCache: true }],
+          { timeoutMs },
+        );
+        if (options.syncPreference !== false && isRewardPopupInterceptorStateEnabled(state) !== preference.enabled) {
+          state = await qqWsSession.call(
+            "gameCtl.setRewardPopupInterceptorEnabled",
+            [preference.enabled, { silent: true, intervalMs: 1_200, waitAfter: 60 }],
+            { timeoutMs },
+          );
+        }
+        return applyRewardPopupInterceptorUiState(payload, state);
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        payload.reason = "runtime_state_failed";
+        payload.error = err.message;
+        payload.note = "读取奖励弹窗拦截状态失败";
+        return payload;
+      }
+    }
+
+    let session = null;
+    try {
+      session = await ensureAutomationSession();
+      await ensureAutomationGameCtl(session);
+      payload.runtimeReady = true;
+      let state = await callAutomationGameCtl(
+        session,
+        "gameCtl.getRewardPopupInterceptorState",
+        [{ silent: true, noCache: true }],
+        { timeoutMs, noCache: true },
       );
+      if (options.syncPreference !== false && isRewardPopupInterceptorStateEnabled(state) !== preference.enabled) {
+        state = await callAutomationGameCtl(
+          session,
+          "gameCtl.setRewardPopupInterceptorEnabled",
+          [preference.enabled, { silent: true, intervalMs: 1_200, waitAfter: 60 }],
+          { timeoutMs, noCache: true },
+        );
+      }
       return applyRewardPopupInterceptorUiState(payload, state);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      payload.reason = "runtime_state_failed";
+      payload.reason = classifyCdpRewardPopupInterceptorError(err.message);
       payload.error = err.message;
-      payload.note = "读取奖励弹窗拦截状态失败";
+      if (payload.reason === "runtime_missing_method") {
+        payload.note = "当前微信 runtime 未暴露奖励弹窗拦截方法，请重新注入最新 button.js";
+      } else if (payload.reason === "runtime_not_ready") {
+        payload.note = "微信 runtime 尚未就绪";
+      } else {
+        payload.note = "读取奖励弹窗拦截状态失败";
+      }
       return payload;
     }
   }
 
   async function setRewardPopupInterceptorForUi(input = {}) {
     const timeoutMs = Math.max(1000, Number(input.timeoutMs) || 6000);
-    const status = await inspectRewardPopupInterceptorForUi({ timeoutMs });
-    if (status.resolvedTarget !== "qq_ws") {
-      throw new Error("奖励弹窗拦截仅支持 qq_ws 运行时");
-    }
+    const preference = await saveRewardPopupInterceptorPreference({ enabled: input.enabled === true });
+    clearGameCtlReadCache("reward-popup-interceptor-preference");
+    const status = await inspectRewardPopupInterceptorForUi({
+      timeoutMs,
+      preference,
+      syncPreference: false,
+    });
     if (status.reason === "runtime_not_ready") {
-      throw new Error("QQ 宿主尚未就绪");
+      throw new Error(status.resolvedTarget === "qq_ws" ? "QQ 宿主尚未就绪" : "微信 runtime 尚未就绪");
     }
     if (status.reason === "runtime_not_synced") {
       const sync = status.sync || {};
@@ -2552,7 +2925,9 @@ function createGateway(config) {
       );
     }
     if (status.reason === "runtime_missing_method") {
-      throw new Error("当前 runtime 缺少奖励弹窗拦截方法，请重新加载最新补丁");
+      throw new Error(status.resolvedTarget === "qq_ws"
+        ? "当前 runtime 缺少奖励弹窗拦截方法，请重新加载最新补丁"
+        : "当前微信 runtime 缺少奖励弹窗拦截方法，请重新注入最新 button.js");
     }
     if (!status.available && status.error) {
       throw new Error(status.error);
@@ -2566,13 +2941,24 @@ function createGateway(config) {
       opts.waitAfter = Math.max(0, Number(input.waitAfter) || 0);
     }
 
-    const state = await qqWsSession.call(
-      "gameCtl.setRewardPopupInterceptorEnabled",
-      [input.enabled === true, opts],
-      { timeoutMs },
+    const session = status.resolvedTarget === "qq_ws" ? qqWsSession : await ensureAutomationSession();
+    if (status.resolvedTarget !== "qq_ws") {
+      await ensureAutomationGameCtl(session);
+    }
+    const callRuntime = async (enabled) => (
+      status.resolvedTarget === "qq_ws"
+        ? await qqWsSession.call("gameCtl.setRewardPopupInterceptorEnabled", [enabled, opts], { timeoutMs })
+        : await callAutomationGameCtl(
+            session,
+            "gameCtl.setRewardPopupInterceptorEnabled",
+            [enabled, opts],
+            { timeoutMs },
+          )
     );
 
-    if (input.enabled === false) {
+    const state = await callRuntime(preference.enabled);
+
+    if (preference.enabled === false) {
       const settleDelayMs = Math.max(
         320,
         (Number(state && state.intervalMs) || 180) + (Number(state && state.waitAfter) || 0) + 180,
@@ -2584,17 +2970,13 @@ function createGateway(config) {
         if (!next.available || !next.enabled) {
           return next;
         }
-        const stoppedState = await qqWsSession.call(
-          "gameCtl.setRewardPopupInterceptorEnabled",
-          [false, opts],
-          { timeoutMs },
-        );
+        const stoppedState = await callRuntime(false);
         next = applyRewardPopupInterceptorUiState({ ...next }, stoppedState);
       }
       return next;
     }
 
-    const next = await inspectRewardPopupInterceptorForUi({ timeoutMs });
+    const next = await inspectRewardPopupInterceptorForUi({ timeoutMs, preference });
     return applyRewardPopupInterceptorUiState(next, state);
   }
 
@@ -2602,6 +2984,7 @@ function createGateway(config) {
     clientKey: null,
     lockedGid: null,
     profile: null,
+    updatedAt: 0,
   };
   const taskEventLogStore = new TaskEventLogStore(projectRoot);
   let wss = null;
@@ -3834,9 +4217,11 @@ function createGateway(config) {
 
     if (req.method === "GET" && urlPath === "/api/qq-bundle") {
       try {
+        const requestUrl = parseRequestUrl(req);
         const built = buildQqBundle({
           config,
           projectRoot,
+          bundleMode: requestUrl.searchParams.get("mode") || undefined,
         });
         const asRaw = req.url.includes("raw=1");
         const asDownload = req.url.includes("download=1");
@@ -3876,6 +4261,7 @@ function createGateway(config) {
           targetPath: requestUrl.searchParams.get("targetPath"),
           appId: requestUrl.searchParams.get("appid"),
           srcRoot: requestUrl.searchParams.get("srcRoot") || config.qqMiniappSrcRoot,
+          bundleMode: requestUrl.searchParams.get("mode") || undefined,
         });
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, data: { ...target, bundle } }));
@@ -3903,11 +4289,13 @@ function createGateway(config) {
         const built = buildQqBundle({
           config,
           projectRoot,
+          bundleMode: parsed.bundleMode || undefined,
         });
         const bundle = getQqBundleSnapshot({
           targetPath: parsed.targetPath,
           appId: parsed.appId,
           srcRoot: parsed.srcRoot || config.qqMiniappSrcRoot,
+          bundleMode: parsed.bundleMode || undefined,
         });
         const targetPaths = Array.isArray(target.targetPaths) && target.targetPaths.length > 0
           ? target.targetPaths
@@ -4140,6 +4528,13 @@ function createGateway(config) {
 
     if (req.method === "GET" && urlPath === "/api/analytics") {
       try {
+        const cacheKey = `analytics:${parsedUrl.searchParams.get("sort") || "exp"}:${parsedUrl.searchParams.get("maxLevel") || "0"}`;
+        const cached = getUiReadCache(cacheKey);
+        if (cached) {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: true, data: cached }));
+          return;
+        }
         const sort = String(parsedUrl.searchParams.get("sort") || "exp").trim().toLowerCase();
         const maxLevel = Number(parsedUrl.searchParams.get("maxLevel") || "0");
         let profile = null;
@@ -4175,25 +4570,27 @@ function createGateway(config) {
         } catch (_) {
           availability = null;
         }
+        const data = {
+          list,
+          sort,
+          maxLevel: normalizedMaxLevel,
+          requestedMaxLevel: levelInfo.requestedMaxLevel,
+          effectiveMaxLevel: levelInfo.effectiveMaxLevel,
+          levelSource: levelInfo.levelSource,
+          profile,
+          strategies: getPlantStrategyModes(),
+          recommendations: buildAnalyticsStrategyCards(levelInfo.effectiveMaxLevel, availability).map((item) => ({
+            ...item,
+            recommended: enrichAnalyticsRowForUi(item && item.recommended),
+            currentRecommended: enrichAnalyticsRowForUi(item && item.currentRecommended),
+            theoreticalRecommended: enrichAnalyticsRowForUi(item && item.theoreticalRecommended),
+          })),
+        };
+        setUiReadCache(cacheKey, UI_READ_CACHE_TTL_MS.analytics, data);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({
           ok: true,
-          data: {
-            list,
-            sort,
-            maxLevel: normalizedMaxLevel,
-            requestedMaxLevel: levelInfo.requestedMaxLevel,
-            effectiveMaxLevel: levelInfo.effectiveMaxLevel,
-            levelSource: levelInfo.levelSource,
-            profile,
-            strategies: getPlantStrategyModes(),
-            recommendations: buildAnalyticsStrategyCards(levelInfo.effectiveMaxLevel, availability).map((item) => ({
-              ...item,
-              recommended: enrichAnalyticsRowForUi(item && item.recommended),
-              currentRecommended: enrichAnalyticsRowForUi(item && item.currentRecommended),
-              theoreticalRecommended: enrichAnalyticsRowForUi(item && item.theoreticalRecommended),
-            })),
-          },
+          data,
         }));
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -4205,6 +4602,13 @@ function createGateway(config) {
 
     if (req.method === "GET" && urlPath === "/api/backpack-seed-options") {
       try {
+        const cacheKey = `backpackSeedOptions:${parsedUrl.searchParams.get("selected") || ""}:${parsedUrl.searchParams.get("forcePriority") === "1" ? "1" : "0"}`;
+        const cached = getUiReadCache(cacheKey);
+        if (cached) {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: true, data: cached }));
+          return;
+        }
         const selectedSeedIds = normalizePositiveIntList(parsedUrl.searchParams.get("selected"));
         const forcePriority = parsedUrl.searchParams.get("forcePriority") === "1";
         let availability = { seedList: [], shopList: [] };
@@ -4217,16 +4621,18 @@ function createGateway(config) {
         } catch (_) {
           availability = { seedList: [], shopList: [] };
         }
+        const data = {
+          updatedAt: Date.now(),
+          list: buildBackpackSeedPriorityOptions(availability.seedList, {
+            selectedSeedIds,
+            forcePriority,
+          }),
+        };
+        setUiReadCache(cacheKey, UI_READ_CACHE_TTL_MS.backpackSeedOptions, data);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({
           ok: true,
-          data: {
-            updatedAt: Date.now(),
-            list: buildBackpackSeedPriorityOptions(availability.seedList, {
-              selectedSeedIds,
-              forcePriority,
-            }),
-          },
+          data,
         }));
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -4259,12 +4665,19 @@ function createGateway(config) {
 
     if (req.method === "GET" && urlPath === "/api/lands") {
       try {
+        const cached = getUiReadCache("lands:default");
+        if (cached) {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: true, data: cached }));
+          return;
+        }
         assertQqRuntimeBundleSynced();
         const data = await fetchLandDetailsForUi({
           ensureAutomationSession,
           ensureAutomationGameCtl,
           callAutomationGameCtl,
         });
+        setUiReadCache("lands:default", UI_READ_CACHE_TTL_MS.lands, data);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, data }));
       } catch (e) {
@@ -4548,6 +4961,12 @@ function createGateway(config) {
 
     if (req.method === "GET" && urlPath === "/api/player-profile") {
       try {
+        const cached = getUiReadCache("playerProfile:default");
+        if (cached) {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: true, data: decoratePlayerProfile(cached) }));
+          return;
+        }
         let profile = await fetchPlayerProfileForUi({
           ensureAutomationSession,
           ensureAutomationGameCtl,
@@ -4557,6 +4976,7 @@ function createGateway(config) {
           profileCache: playerProfileCache,
         });
         profile = decoratePlayerProfile(profile);
+        setUiReadCache("playerProfile:default", UI_READ_CACHE_TTL_MS.playerProfile, profile);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, data: profile }));
       } catch (e) {

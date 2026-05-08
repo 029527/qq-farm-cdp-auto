@@ -22,6 +22,7 @@ function parseArgs(argv) {
     appId: "",
     srcRoot: "",
     out: "",
+    bundleMode: "",
     bundleOnly: false,
     noBackup: false,
   };
@@ -48,6 +49,11 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (arg === "--bundle-mode") {
+      out.bundleMode = String(argv[i + 1] || "");
+      i += 1;
+      continue;
+    }
     if (arg === "--bundle-only") {
       out.bundleOnly = true;
       continue;
@@ -64,16 +70,18 @@ function parseArgs(argv) {
 function main() {
   const config = getConfig();
   const args = parseArgs(process.argv.slice(2));
-  const outPath = path.resolve(args.out || config.qqBundleOutPath || path.join(projectRoot, "dist", "qq-miniapp-bootstrap.js"));
   const built = buildQqBundle({
     config,
     projectRoot,
+    bundleMode: args.bundleMode || undefined,
   });
   const bundleText = built.bundleText;
+  const outPath = path.resolve(args.out || built.meta.outputPath || path.join(projectRoot, "dist", built.meta.defaultFilename || "qq-miniapp-bootstrap.js"));
 
   ensureParentDir(outPath);
   fs.writeFileSync(outPath, bundleText, "utf8");
   console.log(`[qq-patch] bootstrap bundle written: ${outPath}`);
+  console.log(`[qq-patch] bundle mode: ${built.meta.bundleMode || "full"} (${built.meta.sourceRelPath || "button.js"})`);
 
   const target = resolveQqPatchTarget({
     targetPath: args.target,
@@ -107,4 +115,10 @@ function main() {
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  const err = error instanceof Error ? error : new Error(String(error));
+  console.error(`[qq-patch] failed: ${err.message}`);
+  process.exit(1);
+}

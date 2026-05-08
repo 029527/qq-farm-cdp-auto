@@ -45,6 +45,11 @@
 4. 按提示先选择目标平台，再选择 `QQ / 微信`
 5. 等浏览器自动打开控制页
 
+Lite UI / 悬浮窗界面启动：
+
+- Windows 双击运行 `start-lite.bat`
+- macOS 在终端执行 `./start-lite.sh`
+
 启动脚本会自动做这些事：
 
 - 检查 Node.js 版本
@@ -138,11 +143,64 @@ npm run qq:patch
 npm run qq:patch -- --qq-appid 1112386029
 ```
 
+临时导出完整调试包：
+
+```bash
+npm run qq:bundle -- --bundle-mode full
+```
+
 导出当前小程序缓存图片：
 
 ```bash
 npm run qq:images
 ```
+
+### QQ lite 注入包维护
+
+QQ 路线默认使用 `lite` 注入包，来源文件是 [`button-lite.js`](button-lite.js)，由 [`button.js`](button.js) 生成。`lite` 包会保留自动农场必要能力，同时裁掉大部分诊断扫描和 spy，降低注入解析、后台占用和小程序卡顿。
+
+只要改动了 `button.js` 中会影响 QQ 运行时的能力层代码，都需要重新封装 lite 注入包：
+
+```bash
+npm run qq:build-lite
+npm run qq:verify
+npm run qq:bundle
+```
+
+如果需要直接打进 QQ 小程序缓存里的 `game.js`：
+
+```bash
+npm run qq:patch
+```
+
+如果只想导出到指定文件：
+
+```cmd
+npm run qq:bundle -- --out "%TEMP%\\qq-miniapp-bootstrap.js"
+```
+
+PowerShell 可使用：
+
+```powershell
+npm run qq:bundle -- --out "$env:TEMP\qq-miniapp-bootstrap.js"
+```
+
+维护规则：
+
+- `button.js` 是微信路线和 full 调试包的来源；`button-lite.js` 是 QQ 默认运行包来源。
+- 改了 `button.js` 后不要手工编辑 `button-lite.js`，应执行 `npm run qq:build-lite` 重新生成。
+- `npm run qq:build-lite` 会做语法检查和 200KB 体积上限检查；超过上限会失败。
+- `npm run qq:verify` 用于确认当前默认 bundle 可构建、host 地址和脚本 hash 正常。
+- 需要完整诊断能力时，临时使用 `FARM_QQ_BUNDLE_MODE=full` 或命令参数 `--bundle-mode full`；日常运行建议保持默认 `lite`。
+
+### 本轮关键运行时调整
+
+- QQ 默认 bundle 模式为 `lite`，降低注入包体积和小程序解析压力。
+- 默认不再自动启动 runtime spies、interaction spies 和 reconnect watcher，需要诊断时再手动开启。
+- 网关对短时间重复的只读 `gameCtl.*` 调用做短 TTL 缓存，操作类调用后自动清缓存。
+- 健康状态中新增统一 `rpcStats`，QQ 和微信路线都可以查看慢调用、调用次数和缓存命中。
+- 奖励弹窗拦截支持 QQ 与微信两端，并把用户开关保存到 `data/reward-popup-interceptor-state.json`。
+- 奖励弹窗拦截关闭时会恢复被隐藏的节点，避免关闭后仍持续屏蔽弹窗。
 
 ## 微信路线怎么用
 
@@ -194,6 +252,7 @@ npm run qq:images
 | [`start.bat`](start.bat) | Windows 标准启动入口，启动前会询问平台与 `QQ / 微信` |
 | [`start.sh`](start.sh) | Shell 启动入口，启动前会询问平台与 `QQ / 微信` |
 | [`start-lite.bat`](start-lite.bat) | Windows Lite 悬浮窗启动入口，保留原始轻量启动方式 |
+| [`start-lite.sh`](start-lite.sh) | macOS Lite 悬浮窗启动入口，使用 Shell 启动轻量 UI |
 
 ## 图片资源约定
 
@@ -223,7 +282,7 @@ npm run qq:images
 
 - macOS 支持当前主要覆盖 QQ 路线：QQ 小程序目录自动识别、`FARM_QQ_MINIAPP_SRC_ROOT=~/...` 路径展开、启动前平台选择对应的默认路径匹配
 - 微信路线依赖现有 `wmpf + frida + WeChatAppEx.exe` 调试链路，当前未声明支持 macOS
-- Lite 悬浮窗当前仍以 Windows Electron 桌面环境为前提；它保留原始轻量切换 `QQ / 微信` 的入口，不复用标准启动流程
+- Lite 悬浮窗保留原始轻量切换 `QQ / 微信` 的入口，不复用标准启动流程；Windows 使用 `start-lite.bat`，macOS 使用 `./start-lite.sh`
 
 微信兼容版本可参考 [`wmpf/frida/config`](wmpf/frida/config)。
 
@@ -237,6 +296,7 @@ npm run qq:images
 | `npm run start:wx:auto` | 启动微信路线并进入自动农场模式 |
 | `npm run gateway -- --qq` | 仅启动 QQ 网关 |
 | `npm run gateway -- --wx` | 仅启动微信网关 |
+| `npm run qq:build-lite` | 从 `button.js` 重新生成默认 QQ lite 注入包 `button-lite.js` |
 | `npm run qq:bundle` | 生成 QQ bundle |
 | `npm run qq:patch` | 给 QQ 小程序 `game.js` 打补丁 |
 | `npm run qq:verify` | 校验 QQ bundle |
@@ -281,6 +341,7 @@ npm run start -- --qq
 | `FARM_QQ_APPID` | QQ 小程序 `appid`，用于自动定位最新目录 |
 | `FARM_QQ_MINIAPP_SRC_ROOT` | QQ 本地 `miniapp_src` 根目录 |
 | `FARM_QQ_HOST_WS_URL` | 写入 QQ bundle 的本地宿主地址 |
+| `FARM_QQ_BUNDLE_MODE` | QQ 注入包模式：`lite` 默认运行包，`full` 调试包 |
 | `FARM_QQ_BUNDLE_OUT` | 命令行导出 bundle 的默认输出路径 |
 
 ### QQ 路线示例
@@ -296,7 +357,10 @@ FARM_QQ_WS_CALL_TIMEOUT_MS=15000
 FARM_QQ_APPID=1112386029
 FARM_QQ_HOST_WS_URL=ws://127.0.0.1:8787/miniapp
 FARM_QQ_HOST_VERSION=qq-host-1
+FARM_QQ_BUNDLE_MODE=lite
 ```
+
+QQ 路线建议保持 `FARM_RUNTIME_TARGET=qq_ws`，不要同时启动微信 CDP / WMPF / Frida 桥接；需要运行时诊断时再临时切换 `FARM_QQ_BUNDLE_MODE=full`。
 
 ## 默认端口与地址
 

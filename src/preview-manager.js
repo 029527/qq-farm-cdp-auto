@@ -1,5 +1,7 @@
 "use strict";
 
+const MAX_CACHED_FRAME_BASE64_BYTES = 2_000_000;
+
 function toInt(value, defaultValue, min, max) {
   const n = Number.parseInt(String(value ?? ""), 10);
   const fallback = Number.isFinite(n) ? n : defaultValue;
@@ -113,14 +115,15 @@ class PreviewManager {
         scale: params?.metadata?.pageScaleFactor ?? null,
         bytesBase64: data.length,
       };
-      this.lastFramePayload = {
+      const payload = {
         event: "previewFrame",
         ts,
         mediaType,
         data,
         meta: this.lastFrameMeta,
       };
-      this._broadcast(this.lastFramePayload);
+      this.lastFramePayload = data.length <= MAX_CACHED_FRAME_BASE64_BYTES ? payload : null;
+      this._broadcast(payload);
     };
     session.on("Page.screencastFrame", this._onScreencastFrame);
   }
@@ -188,6 +191,7 @@ class PreviewManager {
     }
     this._unbindSession();
     this.session = null;
+    this.lastFramePayload = null;
     this._emitState({ reason });
     return this.getState();
   }
@@ -217,13 +221,7 @@ class PreviewManager {
       scale: null,
       bytesBase64: data.length,
     };
-    this.lastFramePayload = {
-      event: "previewFrame",
-      ts,
-      mediaType,
-      data,
-      meta: this.lastFrameMeta,
-    };
+    this.lastFramePayload = null;
     return {
       ts,
       mediaType,

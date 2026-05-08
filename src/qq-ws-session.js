@@ -37,6 +37,15 @@ class QqWsSession extends EventEmitter {
     this.lastError = null;
     this.history = [];
     this.maxHistory = QQ_WS_HISTORY_LIMIT;
+    this.callStats = {
+      total: 0,
+      success: 0,
+      failed: 0,
+      totalDurationMs: 0,
+      maxDurationMs: 0,
+      byPath: Object.create(null),
+      slowRecent: [],
+    };
   }
 
   attach() {
@@ -144,6 +153,7 @@ class QqWsSession extends EventEmitter {
     }
 
     const reqId = "qqcall-" + (++this.callSeq);
+    const startedAt = Date.now();
     const packet = {
       id: reqId,
       type: "call",
@@ -158,12 +168,14 @@ class QqWsSession extends EventEmitter {
       const timeout = Math.max(1000, Number(opts.timeoutMs) || this.callTimeoutMs);
       const timer = setTimeout(() => {
         this.pendingCalls.delete(reqId);
+        this._recordCall(packet.payload.path, Date.now() - startedAt, false, "timeout");
         reject(new Error(`qq ws call timed out: ${packet.payload.path} (${timeout}ms)`));
       }, timeout);
 
       this.pendingCalls.set(reqId, {
         clientId: active.id,
         timer,
+        startedAt,
         resolve,
         reject,
       });
@@ -173,6 +185,7 @@ class QqWsSession extends EventEmitter {
       } catch (error) {
         clearTimeout(timer);
         this.pendingCalls.delete(reqId);
+        this._recordCall(packet.payload.path, Date.now() - startedAt, false, toErrorMessage(error));
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -211,11 +224,82 @@ class QqWsSession extends EventEmitter {
       clientCount: this.clients.size,
       activeClientId: this.activeClientId,
       pendingCalls: this.pendingCalls.size,
+      callStats: this._getCallStatsSnapshot(),
       lastLog: this.lastLog,
       lastEvent: this.lastEvent,
       lastError: this.lastError,
       recentMessages: [...this.history],
       clients,
+    };
+  }
+
+  _recordCall(pathName, durationMs, ok, error) {
+    const pathKey = String(pathName || "unknown");
+    const elapsed = Math.max(0, Number(durationMs) || 0);
+    this.callStats.total += 1;
+    if (ok) this.callStats.success += 1;
+    else this.callStats.failed += 1;
+    this.callStats.totalDurationMs += elapsed;
+    this.callStats.maxDurationMs = Math.max(this.callStats.maxDurationMs, elapsed);
+
+    if (!this.callStats.byPath[pathKey]) {
+      this.callStats.byPath[pathKey] = {
+        path: pathKey,
+        total: 0,
+        success: 0,
+        failed: 0,
+        totalDurationMs: 0,
+        maxDurationMs: 0,
+        lastDurationMs: 0,
+        lastAt: null,
+        lastError: null,
+      };
+    }
+    const item = this.callStats.byPath[pathKey];
+    item.total += 1;
+    if (ok) item.success += 1;
+    else item.failed += 1;
+    item.totalDurationMs += elapsed;
+    item.maxDurationMs = Math.max(item.maxDurationMs, elapsed);
+    item.lastDurationMs = elapsed;
+    item.lastAt = new Date().toISOString();
+    item.lastError = ok ? null : String(error || "unknown_error");
+
+    if (elapsed >= 500 || !ok) {
+      this.callStats.slowRecent.push({
+        at: item.lastAt,
+        path: pathKey,
+        durationMs: elapsed,
+        ok: !!ok,
+        error: ok ? null : item.lastError,
+      });
+      if (this.callStats.slowRecent.length > 30) {
+        this.callStats.slowRecent.splice(0, this.callStats.slowRecent.length - 30);
+      }
+    }
+  }
+
+  _getCallStatsSnapshot() {
+    const byPath = Object.values(this.callStats.byPath)
+      .map((item) => ({
+        ...item,
+        avgDurationMs: item.total > 0 ? Math.round(item.totalDurationMs / item.total) : 0,
+      }))
+      .sort((a, b) => {
+        if (b.totalDurationMs !== a.totalDurationMs) return b.totalDurationMs - a.totalDurationMs;
+        return b.maxDurationMs - a.maxDurationMs;
+      })
+      .slice(0, 20);
+    return {
+      total: this.callStats.total,
+      success: this.callStats.success,
+      failed: this.callStats.failed,
+      avgDurationMs: this.callStats.total > 0
+        ? Math.round(this.callStats.totalDurationMs / this.callStats.total)
+        : 0,
+      maxDurationMs: Math.round(this.callStats.maxDurationMs),
+      byPath,
+      slowRecent: this.callStats.slowRecent.slice(-30),
     };
   }
 
@@ -406,9 +490,11 @@ class QqWsSession extends EventEmitter {
       this.pendingCalls.delete(String(packet.id));
       const payload = packet.payload && typeof packet.payload === "object" ? packet.payload : {};
       if (payload.ok === false) {
+        this._recordCall(payload.path || "unknown", Date.now() - pending.startedAt, false, payload.error || "qq ws call failed");
         pending.reject(new Error(payload.error || "qq ws call failed"));
         return;
       }
+      this._recordCall(payload.path || "unknown", Date.now() - pending.startedAt, true, null);
       pending.resolve(payload.data);
       return;
     }

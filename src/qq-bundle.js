@@ -9,6 +9,20 @@ const { findLatestQqMiniappByAppId } = require("./qq-miniapp-discovery");
 const MARKER_START = "// >>> QQ_FARM_AUTOMATION START >>>";
 const MARKER_END = "// <<< QQ_FARM_AUTOMATION END <<<";
 const DEFAULT_QQ_BUNDLE_FILENAME = "qq-miniapp-bootstrap.js";
+const DEFAULT_QQ_BUNDLE_LITE_FILENAME = "qq-miniapp-bootstrap-lite.js";
+
+function normalizeQqBundleMode(value) {
+  const text = String(value == null ? "" : value).trim().toLowerCase();
+  return text === "lite" ? "lite" : "full";
+}
+
+function getQqBundleSourceRelPath(mode) {
+  return normalizeQqBundleMode(mode) === "lite" ? "button-lite.js" : "button.js";
+}
+
+function getQqBundleDefaultFilename(mode) {
+  return normalizeQqBundleMode(mode) === "lite" ? DEFAULT_QQ_BUNDLE_LITE_FILENAME : DEFAULT_QQ_BUNDLE_FILENAME;
+}
 
 function replaceAll(source, token, value) {
   return String(source).split(token).join(value);
@@ -86,6 +100,20 @@ function normalizeWsUrl(rawUrl, config) {
 
 function loadSource(projectRoot, relPath) {
   return fs.readFileSync(path.join(projectRoot, relPath), "utf8");
+}
+
+function loadButtonSource(projectRoot, mode) {
+  const sourceRelPath = getQqBundleSourceRelPath(mode);
+  const sourcePath = path.join(projectRoot, sourceRelPath);
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(
+      `QQ bundle ${normalizeQqBundleMode(mode)} 模式需要 ${sourceRelPath}，当前文件不存在。请先完成轻量能力层拆分，或使用 full 模式。`,
+    );
+  }
+  return {
+    sourceRelPath,
+    source: fs.readFileSync(sourcePath, "utf8"),
+  };
 }
 
 function renderHostSource(hostTemplate, replacements) {
@@ -187,14 +215,17 @@ function resolveQqPatchTarget(options = {}) {
 }
 
 function getQqBundleState(config) {
-  const outputPath = config.qqBundleOutPath || path.join(path.join(__dirname, ".."), "dist", DEFAULT_QQ_BUNDLE_FILENAME);
+  const bundleMode = normalizeQqBundleMode(config && config.qqBundleMode);
+  const outputPath = config.qqBundleOutPath || path.join(path.join(__dirname, ".."), "dist", getQqBundleDefaultFilename(bundleMode));
   const target = resolveQqPatchTarget({
     targetPath: config.qqGameJsPath,
     appId: config.qqAppId,
     srcRoot: config.qqMiniappSrcRoot,
   });
   return {
-    defaultFilename: DEFAULT_QQ_BUNDLE_FILENAME,
+    defaultFilename: getQqBundleDefaultFilename(bundleMode),
+    bundleMode,
+    sourceRelPath: getQqBundleSourceRelPath(bundleMode),
     outputPath,
     hostWsUrl: normalizeWsUrl(config.qqHostWsUrl, config),
     hostVersion: config.qqHostVersion || "qq-host-1",
@@ -238,16 +269,25 @@ function ensureRuntimeIntegrity(source) {
 function buildQqBundle(options = {}) {
   const projectRoot = options.projectRoot || path.join(__dirname, "..");
   const config = options.config;
-  const state = getQqBundleState(config);
+  const bundleMode = normalizeQqBundleMode(options.bundleMode || (config && config.qqBundleMode));
+  const state = {
+    ...getQqBundleState(config),
+    bundleMode,
+    sourceRelPath: getQqBundleSourceRelPath(bundleMode),
+    defaultFilename: getQqBundleDefaultFilename(bundleMode),
+  };
   const hostWsUrl = normalizeWsUrl(options.hostWsUrl || state.hostWsUrl, config);
   const hostVersion = options.hostVersion || state.hostVersion || "qq-host-1";
-  let buttonSource = loadSource(projectRoot, "button.js");
+  const loadedButton = loadButtonSource(projectRoot, bundleMode);
+  let buttonSource = loadedButton.source;
   buttonSource = ensureRuntimeIntegrity(buttonSource);
   const hostTemplate = loadSource(projectRoot, "qq-host.js");
   const hashSeed = JSON.stringify({
     hostVersion,
     hostWsUrl,
     hostMethods: QQ_RPC_HOST_METHODS,
+    bundleMode,
+    sourceRelPath: loadedButton.sourceRelPath,
     buttonSha1: sha1Hex(buttonSource),
     hostTemplateSha1: sha1Hex(hostTemplate),
   });
@@ -268,19 +308,33 @@ function buildQqBundle(options = {}) {
     hostVersion: ${JSON.stringify(hostVersion)},
     scriptHash: ${JSON.stringify(scriptHash)},
     generatedAt: ${JSON.stringify(generatedAt)},
-    wsUrl: ${JSON.stringify(hostWsUrl)}
+    wsUrl: ${JSON.stringify(hostWsUrl)},
+    bundleMode: ${JSON.stringify(bundleMode)},
+    sourceRelPath: ${JSON.stringify(loadedButton.sourceRelPath)}
   };
   root.__qqFarmBundleMeta = meta;
+
+  function isCurrentButtonLayerInstalled() {
+    var ctl = root.gameCtl || (root.GameGlobal && root.GameGlobal.gameCtl);
+    if (!ctl || typeof ctl !== "object") return false;
+    if (ctl.__scriptHash !== meta.scriptHash) return false;
+    return true;
+  }
 
   function attachScriptHash() {
     var ctl = root.gameCtl || (root.GameGlobal && root.GameGlobal.gameCtl);
     if (!ctl || typeof ctl !== "object") return false;
     ctl.__scriptHash = meta.scriptHash;
+    ctl.__bundleMode = meta.bundleMode;
+    ctl.__sourceRelPath = meta.sourceRelPath;
     return true;
   }
 
   function installButtonLayer() {
-    if (attachScriptHash()) return true;
+    if (isCurrentButtonLayerInstalled()) {
+      attachScriptHash();
+      return true;
+    }
     try {
 ${buttonSource.split("\n").map((line) => "      " + line).join("\n")}
       attachScriptHash();
@@ -327,7 +381,9 @@ ${hostSource}
       scriptHash,
       hostWsUrl,
       hostVersion,
-      defaultFilename: DEFAULT_QQ_BUNDLE_FILENAME,
+      bundleMode,
+      sourceRelPath: loadedButton.sourceRelPath,
+      defaultFilename: state.defaultFilename,
       outputPath: state.outputPath,
       targetConfigured: state.targetConfigured,
       targetPath: state.targetPath,

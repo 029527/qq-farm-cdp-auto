@@ -599,6 +599,7 @@ function shouldApplyFriendCooldown(visit) {
 
 function formatAutoFarmActionLabel(key) {
   if (key === "collect") return "一键收获";
+  if (key === "eraseDead") return "一键清理枯萎";
   if (key === "water") return "一键浇水";
   if (key === "eraseGrass") return "一键除草";
   if (key === "killBug") return "一键杀虫";
@@ -2261,6 +2262,7 @@ class AutoFarmManager {
         ...baseOptions,
         ownFarmEnabled: true,
         includeCollect: true,
+        includeEraseDead: true,
         collectOnlyWhenOwnFarm: this.config.autoFarmOwnCollectOnlyWhenOwnFarm !== false,
         reportProgress: (event) => {
           if (!event || !event.message) return;
@@ -2383,6 +2385,19 @@ class AutoFarmManager {
     return "执行完成";
   }
 
+  _buildLastResultSnapshot({ injected, taskId, taskLabel, due, result, error }) {
+    const snapshot = {
+      injected: injected == null ? null : !!injected,
+      taskId,
+      taskLabel,
+      summary: this._buildTaskResultSummary(taskId, result, error),
+      finishedAt: new Date().toISOString(),
+    };
+    if (due && typeof due === "object") snapshot.due = { ...due };
+    if (error) snapshot.error = String(error);
+    return snapshot;
+  }
+
   async _tick() {
     if (!this.running) return;
     if (this.busy || this.externalRuntimeLockCount > 0) {
@@ -2429,6 +2444,8 @@ class AutoFarmManager {
       "triggerOneClickOperation",
       "clickMatureEffect",
       "dismissRewardPopup",
+      "getRewardPopupInterceptorState",
+      "setRewardPopupInterceptorEnabled",
       "inspectLandDetail",
       "inspectFarmModelRuntime",
       "inspectMainUiRuntime",
@@ -2501,9 +2518,30 @@ class AutoFarmManager {
       category: "task_start",
     });
 
+    let session = null;
+    let injectState = null;
+    let rewardPopupInterceptorEnabledForCycle = false;
     try {
-      const session = await this.ensureSession();
-      const injectState = await this.ensureGameCtlImpl(session);
+      session = await this.ensureSession();
+      injectState = await this.ensureGameCtlImpl(session);
+      try {
+        const interceptorState = await this.callGameCtlImpl(session, "gameCtl.getRewardPopupInterceptorState", [{
+          silent: true,
+        }]);
+        if (!(interceptorState && interceptorState.enabled === true)) {
+          await this.callGameCtlImpl(session, "gameCtl.setRewardPopupInterceptorEnabled", [true, {
+            silent: true,
+            intervalMs: 1_200,
+            waitAfter: 60,
+          }]);
+          rewardPopupInterceptorEnabledForCycle = true;
+        }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        pushCycleEvent("warn", `自动农场 / 奖励弹窗短时拦截启用失败：${err.message}`, {
+          category: "reward_popup_interceptor",
+        });
+      }
       const cycleOpts = this._buildTaskCycleOptions(selectedTaskId, this.currentRunContext);
       const result = await runAutoFarmCycle({
         session,
@@ -2520,13 +2558,14 @@ class AutoFarmManager {
       runtimeTaskState.lastError = null;
       runtimeTaskState.runCount += 1;
       runtimeTaskState.lastResultSummary = this._buildTaskResultSummary(selectedTaskId, result, null);
-      this.lastResult = {
-        injected: injectState.injected,
+      this.lastResult = this._buildLastResultSnapshot({
+        injected: injectState && injectState.injected,
         taskId: selectedTaskId,
         taskLabel,
         due,
         result,
-      };
+        error: null,
+      });
       const cooldownApplied = this._applyFriendVisitCooldowns(result && result.friendSteal, now);
       mergeCycleResultIntoTodayStats(this.todayStats, result);
       this.todayStatsHistory[this.todayStats.dateKey] = normalizeTodayStats(this.todayStats, this.todayStats.dateKey);
@@ -2557,6 +2596,14 @@ class AutoFarmManager {
         this.lastError = null;
         runtimeTaskState.lastError = null;
         runtimeTaskState.lastResultSummary = "已停止";
+        this.lastResult = this._buildLastResultSnapshot({
+          injected: injectState && injectState.injected,
+          taskId: selectedTaskId,
+          taskLabel,
+          due,
+          result: null,
+          error: err.message || "automation_stopped",
+        });
         pushCycleEvent("info", `自动农场 / 当前轮已停止：${err.message || "manual"}`, {
           category: "cycle_stopped",
         });
@@ -2565,11 +2612,31 @@ class AutoFarmManager {
       this.lastError = err.message;
       runtimeTaskState.lastError = err.message;
       runtimeTaskState.lastResultSummary = this._buildTaskResultSummary(selectedTaskId, null, err.message);
+      this.lastResult = this._buildLastResultSnapshot({
+        injected: injectState && injectState.injected,
+        taskId: selectedTaskId,
+        taskLabel,
+        due,
+        result: null,
+        error: err.message,
+      });
       pushCycleEvent("error", `自动农场 / 调度失败：${err.message}`, {
         category: "cycle_failed",
       });
       throw err;
     } finally {
+      if (rewardPopupInterceptorEnabledForCycle && session) {
+        try {
+          await this.callGameCtlImpl(session, "gameCtl.setRewardPopupInterceptorEnabled", [false, {
+            silent: true,
+          }]);
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          pushCycleEvent("warn", `自动农场 / 奖励弹窗短时拦截关闭失败：${err.message}`, {
+            category: "reward_popup_interceptor",
+          });
+        }
+      }
       const afterAutoFertilizerStateSerialized = JSON.stringify(serializeAutoFertilizerState(this.autoFertilizerState));
       if (afterAutoFertilizerStateSerialized !== beforeAutoFertilizerStateSerialized) {
         await this._persistAutoFertilizerState("cycle");

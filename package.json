@@ -17,6 +17,7 @@
     "start:qq:auto": "node run.cjs --qq --auto-farm",
     "start:wx:auto": "node run.cjs --wx --auto-farm",
     "gateway": "node src/index.js",
+    "qq:build-lite": "node scripts/build-button-lite.cjs",
     "qq:bundle": "node scripts/patch-qq-miniapp.cjs --bundle-only",
     "qq:verify": "node scripts/verify-qq-bundle.cjs",
     "qq:reward-popup": "node scripts/reward-popup-interceptor.cjs",

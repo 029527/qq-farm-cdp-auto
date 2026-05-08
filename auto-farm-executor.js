@@ -2406,12 +2406,14 @@ async function runCurrentFarmOneClickTasks(session, callGameCtl, opts) {
   });
   const farmType = statusBefore && statusBefore.farmType ? statusBefore.farmType : "unknown";
   const includeCollect = !opts || opts.includeCollect !== false;
+  const includeEraseDead = includeCollect && (!opts || opts.includeEraseDead !== false);
   const includeWater = !opts || opts.includeWater !== false;
   const includeEraseGrass = !opts || opts.includeEraseGrass !== false;
   const includeKillBug = !opts || opts.includeKillBug !== false;
   const specs = [];
 
   if (includeCollect) specs.push({ key: "collect", op: "HARVEST" });
+  if (farmType === "own" && includeEraseDead) specs.push({ key: "eraseDead", op: "HARVEST" });
   if (farmType === "own") {
     if (includeEraseGrass) specs.push({ key: "eraseGrass", op: "ERASE_GRASS" });
     if (includeKillBug) specs.push({ key: "killBug", op: "KILL_BUG" });
@@ -3187,6 +3189,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
   const enterWaitMs = Math.max(0, Number(opts && opts.enterWaitMs) || 0);
   const actionWaitMs = Math.max(0, Number(opts && opts.actionWaitMs) || 0);
   const includeCollect = !opts || opts.includeCollect !== false;
+  const includeEraseDead = includeCollect && (!opts || opts.includeEraseDead !== false);
   const includeWater = !opts || opts.includeWater !== false;
   const includeEraseGrass = !opts || opts.includeEraseGrass !== false;
   const includeKillBug = !opts || opts.includeKillBug !== false;
@@ -3194,7 +3197,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
   const plantSecondaryMode = opts && opts.autoPlantSecondaryMode ? opts.autoPlantSecondaryMode : "none";
   const fertilizerEnabled = !!(opts && opts.autoFertilizerEnabled === true);
   const fertilizerActive = shouldRunAutoFertilizer(opts || {});
-  const baseTaskEnabled = includeCollect || includeWater || includeEraseGrass || includeKillBug;
+  const baseTaskEnabled = includeCollect || includeEraseDead || includeWater || includeEraseGrass || includeKillBug;
   const plantConfigured = plantPrimaryMode !== "none" || plantSecondaryMode !== "none";
   throwIfAutomationStopped(opts);
   if (!baseTaskEnabled && !plantConfigured && !fertilizerActive) {
@@ -3259,6 +3262,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
 
   const tasks = await runCurrentFarmOneClickTasks(session, callGameCtl, {
     includeCollect,
+    includeEraseDead,
     includeWater,
     includeEraseGrass,
     includeKillBug,
@@ -4081,6 +4085,7 @@ async function runAutoFarmCycle({ session, callGameCtl, options }) {
   if (ownFarmEnabled) {
     payload.ownFarm = await runOwnFarmAutomation(session, callGameCtl, {
       includeCollect: opts.includeCollect !== false,
+      includeEraseDead: opts.includeEraseDead !== false,
       includeWater: opts.includeWater !== false,
       includeEraseGrass: opts.includeEraseGrass !== false,
       includeKillBug: opts.includeKillBug !== false,

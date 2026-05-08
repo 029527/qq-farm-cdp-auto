@@ -23,4 +23,4 @@ if (!url.includes(`:${port}`) || !url.endsWith(pathSuffix)) {
   );
 }
 
-console.log("[verify-qq-bundle] ok, hostWsUrl=" + url + ", scriptHash=" + built.meta.scriptHash);
+console.log("[verify-qq-bundle] ok, mode=" + (built.meta.bundleMode || "full") + ", hostWsUrl=" + url + ", scriptHash=" + built.meta.scriptHash);

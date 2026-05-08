@@ -18,6 +18,7 @@
  * FARM_QQ_HOST_WS_URL   生成 QQ 宿主 bundle 时写入的本地 WebSocket 地址
  * FARM_QQ_HOST_VERSION  QQ 宿主版本号，默认 qq-host-1
  * FARM_QQ_BUNDLE_OUT    生成 bundle 的默认输出路径
+ * FARM_QQ_BUNDLE_MODE   QQ bundle 能力层：full | lite，默认 lite
  */
 
 function parseIntEnv(name, defaultValue) {
@@ -69,6 +70,10 @@ function getConfig() {
     qqHostWsUrl: process.env.FARM_QQ_HOST_WS_URL || "",
     qqHostVersion: process.env.FARM_QQ_HOST_VERSION || "qq-host-1",
     qqBundleOutPath: process.env.FARM_QQ_BUNDLE_OUT || "",
+    qqBundleMode: (() => {
+      const raw = String(process.env.FARM_QQ_BUNDLE_MODE || "lite").trim().toLowerCase();
+      return raw === "lite" ? "lite" : "full";
+    })(),
   };
 }
 

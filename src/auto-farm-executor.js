@@ -22,6 +22,9 @@ const {
   pickBackpackSeed,
 } = require("./backpack-seed-priority");
 
+const RECONNECT_PRECHECK_MIN_INTERVAL_MS = 5_000;
+const reconnectPrecheckBySession = new WeakMap();
+
 function wait(ms) {
   const delayMs = Math.max(0, Number(ms) || 0);
   return new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -541,6 +544,36 @@ async function autoReconnectIfNeeded(session, callGameCtl, opts) {
   }
 }
 
+async function autoReconnectPrecheckIfNeeded(session, callGameCtl, opts) {
+  const callOpts = opts && typeof opts === "object" ? opts : {};
+  if (callOpts.reconnectPrecheck === false) {
+    return { skipped: true, reason: "disabled" };
+  }
+  const now = Date.now();
+  const minIntervalMs = Math.max(
+    500,
+    Number(callOpts.reconnectPrecheckMinIntervalMs) || RECONNECT_PRECHECK_MIN_INTERVAL_MS,
+  );
+  const prev = session && typeof session === "object" ? reconnectPrecheckBySession.get(session) : null;
+  if (callOpts.forceReconnectCheck !== true && prev && now - prev.checkedAt < minIntervalMs) {
+    return { skipped: true, reason: "recent", checkedAt: prev.checkedAt };
+  }
+  const result = await autoReconnectIfNeeded(session, callGameCtl, {
+    waitAfter: callOpts.reconnectWaitAfter,
+    waitForRecovered: callOpts.reconnectWaitForRecovered,
+    recoverTimeoutMs: callOpts.reconnectRecoverTimeoutMs,
+    recoverPollMs: callOpts.reconnectRecoverPollMs,
+  });
+  if (session && typeof session === "object") {
+    reconnectPrecheckBySession.set(session, {
+      checkedAt: Date.now(),
+      handled: !!(result && result.handled),
+      ok: !!(result && result.ok),
+    });
+  }
+  return result;
+}
+
 async function callGameCtlWithRecovery(session, callGameCtl, pathName, args, opts, rpcOptions) {
   const callOpts = opts && typeof opts === "object" ? opts : {};
   const transportCallOpts = rpcOptions && typeof rpcOptions === "object" ? { ...rpcOptions } : {};
@@ -559,12 +592,19 @@ async function callGameCtlWithRecovery(session, callGameCtl, pathName, args, opt
     recoverPollMs: callOpts.reconnectRecoverPollMs,
   };
 
-  await autoReconnectIfNeeded(session, callGameCtl, reconnectOpts);
+  await autoReconnectPrecheckIfNeeded(session, callGameCtl, callOpts);
 
   try {
     return await callGameCtl(session, pathName, args, Object.keys(transportCallOpts).length > 0 ? transportCallOpts : undefined);
   } catch (error) {
     const recover = await autoReconnectIfNeeded(session, callGameCtl, reconnectOpts);
+    if (session && typeof session === "object") {
+      reconnectPrecheckBySession.set(session, {
+        checkedAt: Date.now(),
+        handled: !!(recover && recover.handled),
+        ok: !!(recover && recover.ok),
+      });
+    }
     if (recover && recover.handled && callOpts.retryOnReconnect !== false) {
       return await callGameCtl(session, pathName, args, Object.keys(transportCallOpts).length > 0 ? transportCallOpts : undefined);
     }
@@ -2484,12 +2524,14 @@ async function runCurrentFarmOneClickTasks(session, callGameCtl, opts) {
   });
   const farmType = statusBefore && statusBefore.farmType ? statusBefore.farmType : "unknown";
   const includeCollect = !opts || opts.includeCollect !== false;
+  const includeEraseDead = includeCollect && (!opts || opts.includeEraseDead !== false);
   const includeWater = !opts || opts.includeWater !== false;
   const includeEraseGrass = !opts || opts.includeEraseGrass !== false;
   const includeKillBug = !opts || opts.includeKillBug !== false;
   const specs = [];
 
   if (includeCollect) specs.push({ key: "collect", op: "HARVEST" });
+  if (farmType === "own" && includeEraseDead) specs.push({ key: "eraseDead", op: "HARVEST" });
   if (farmType === "own") {
     if (includeEraseGrass) specs.push({ key: "eraseGrass", op: "ERASE_GRASS" });
     if (includeKillBug) specs.push({ key: "killBug", op: "KILL_BUG" });
@@ -3265,6 +3307,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
   const enterWaitMs = Math.max(0, Number(opts && opts.enterWaitMs) || 0);
   const actionWaitMs = Math.max(0, Number(opts && opts.actionWaitMs) || 0);
   const includeCollect = !opts || opts.includeCollect !== false;
+  const includeEraseDead = includeCollect && (!opts || opts.includeEraseDead !== false);
   const includeWater = !opts || opts.includeWater !== false;
   const includeEraseGrass = !opts || opts.includeEraseGrass !== false;
   const includeKillBug = !opts || opts.includeKillBug !== false;
@@ -3272,7 +3315,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
   const plantSecondaryMode = opts && opts.autoPlantSecondaryMode ? opts.autoPlantSecondaryMode : "none";
   const fertilizerEnabled = !!(opts && opts.autoFertilizerEnabled === true);
   const fertilizerActive = shouldRunAutoFertilizer(opts || {});
-  const baseTaskEnabled = includeCollect || includeWater || includeEraseGrass || includeKillBug;
+  const baseTaskEnabled = includeCollect || includeEraseDead || includeWater || includeEraseGrass || includeKillBug;
   const plantConfigured = plantPrimaryMode !== "none" || plantSecondaryMode !== "none";
   throwIfAutomationStopped(opts);
   if (!baseTaskEnabled && !plantConfigured && !fertilizerActive) {
@@ -3337,6 +3380,7 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
 
   const tasks = await runCurrentFarmOneClickTasks(session, callGameCtl, {
     includeCollect,
+    includeEraseDead,
     includeWater,
     includeEraseGrass,
     includeKillBug,
@@ -4160,6 +4204,7 @@ async function runAutoFarmCycle({ session, callGameCtl, options }) {
   if (ownFarmEnabled) {
     payload.ownFarm = await runOwnFarmAutomation(session, callGameCtl, {
       includeCollect: opts.includeCollect !== false,
+      includeEraseDead: opts.includeEraseDead !== false,
       includeWater: opts.includeWater !== false,
       includeEraseGrass: opts.includeEraseGrass !== false,
       includeKillBug: opts.includeKillBug !== false,

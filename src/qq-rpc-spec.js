@@ -14,6 +14,8 @@ const QQ_RPC_GAME_CTL_METHODS = Object.freeze([
   "triggerOneClickOperation",
   "clickMatureEffect",
   "dismissRewardPopup",
+  "getRewardPopupInterceptorState",
+  "setRewardPopupInterceptorEnabled",
   "inspectRewardPopupTextMatches",
   "inspectRewardPopupTarget",
   "inspectLandDetail",

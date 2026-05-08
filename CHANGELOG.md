@@ -4,6 +4,20 @@
 
 ## 2026-05-08
 
+### 自动收获枯萎清理修复
+
+- 自己农场自动收获现已把 `待清理枯萎 / eraseDead` 纳入收获任务链路，并复用一键收获 `HARVEST` 执行清理；日志会单独显示为 `一键清理枯萎`，避免识别到枯萎地块却一直提示“无待处理项”。
+
+### 运行内存、注入卡顿与奖励弹窗拦截优化
+
+- QQ 注入包默认切换为 `lite` 模式：新增 `button-lite.js` 和 `npm run qq:build-lite`，默认 bundle 体积控制在 200KB 内，减少 QQ 小程序注入后的解析与常驻诊断开销；需要完整诊断能力时仍可通过 `FARM_QQ_BUNDLE_MODE=full` 或 `--bundle-mode full` 使用完整 `button.js`。
+- `button.js` 默认不再自动启动 runtime spies、interaction spies 和 reconnect watcher；相关诊断能力保留为显式调用入口，避免空闲状态持续监听运行时消息。
+- 网关侧减少内存峰值：任务日志改为尾部读取，自动农场 `lastResult` 改为摘要，预览管理不再常驻大体积 base64 帧。
+- 小程序卡顿优化已覆盖 QQ 与微信路线：自动重连预检查改为短时间窗复用，控制台高频只读 `gameCtl.*` 调用增加短 TTL 缓存，并在健康状态里暴露统一 `rpcStats`，用于继续定位慢调用。
+- 奖励弹窗拦截开关不再限制 QQ WS，微信/CDP 路线也复用同一套 `gameCtl.getRewardPopupInterceptorState()` 与 `gameCtl.setRewardPopupInterceptorEnabled()`。
+- 修复奖励弹窗拦截关闭后仍无法恢复的问题：强制隐藏节点前会记录原始状态，关闭开关或停止期间会恢复被改过的节点；首次启用时也会立即扫描，不再等下一轮间隔。
+- 奖励弹窗拦截配置新增持久化文件 `data/reward-popup-interceptor-state.json`；控制页面关闭后再打开会显示保存状态，状态接口会把保存配置同步到当前 QQ/微信 runtime，避免读到旧 runtime 临时状态。
+
 ### macOS 轻量悬浮窗入口补齐
 
 - 新增 `start-lite.sh`，macOS 下现在也可以像 Windows 轻量入口一样，在启动前选择 `Windows / macOS` 目标平台，并把结果写入 `FARM_LAUNCH_TARGET_PLATFORM`，用于 QQ 小程序默认目录匹配。

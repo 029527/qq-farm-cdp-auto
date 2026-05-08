@@ -9744,14 +9744,14 @@
         } else if (payload.reason === "runtime_not_ready") {
           status = { text: "等待连接", tone: "wait" };
           nextRunText = "宿主就绪后";
-          detailText = "等待 QQ 宿主与 gameCtl 就绪。";
+          detailText = "等待当前小程序 runtime 与 gameCtl 就绪。";
         } else if (payload.reason === "runtime_missing_method") {
           status = { text: "待升级", tone: "wait" };
           nextRunText = "重载后可用";
-          detailText = "当前 runtime 缺少奖励弹窗拦截方法，请重新加载最新补丁。";
+          detailText = "当前 runtime 缺少奖励弹窗拦截方法，请重新注入或重新加载最新脚本。";
         } else if (payload.reason === "runtime_not_qq_ws") {
           status = { text: "当前不可用", tone: "off" };
-          detailText = "仅 QQ WS 运行时支持该开关。";
+          detailText = "当前运行时暂未暴露奖励弹窗拦截开关。";
         } else if (payload.error) {
           status = { text: "状态异常", tone: "off" };
           detailText = payload.error;
@@ -10134,7 +10134,7 @@
 
       function renderRewardPopupInterceptorControl(payload) {
         if (!rewardPopupInterceptorEnabled) return;
-        var checked = !!(payload && payload.available && payload.enabled);
+        var checked = !!(payload && (payload.available ? payload.enabled : payload.configuredEnabled));
         var disabled = rewardPopupInterceptorBusy || !(payload && payload.available);
         rewardPopupInterceptorEnabled.checked = checked;
         rewardPopupInterceptorEnabled.disabled = disabled;
@@ -10158,20 +10158,24 @@
           }
           return;
         }
+        if (payload.configuredEnabled) {
+          txtRewardPopupInterceptorHint.textContent = "已保存为开启，等待当前小程序 runtime 就绪后会自动同步。";
+          return;
+        }
         if (payload.reason === "runtime_not_synced") {
           txtRewardPopupInterceptorHint.textContent = "当前 QQ runtime 还没加载最新补丁，重启小程序后可在这里直接开关。";
           return;
         }
         if (payload.reason === "runtime_not_ready") {
-          txtRewardPopupInterceptorHint.textContent = "等待 QQ 宿主与 gameCtl 就绪后，这里会自动同步开关状态。";
+          txtRewardPopupInterceptorHint.textContent = "等待当前小程序 runtime 与 gameCtl 就绪后，这里会自动同步开关状态。";
           return;
         }
         if (payload.reason === "runtime_missing_method") {
-          txtRewardPopupInterceptorHint.textContent = "当前 runtime 缺少奖励弹窗拦截方法，请重新加载最新补丁。";
+          txtRewardPopupInterceptorHint.textContent = "当前 runtime 缺少奖励弹窗拦截方法，请重新注入或重新加载最新脚本。";
           return;
         }
         if (payload.reason === "runtime_not_qq_ws") {
-          txtRewardPopupInterceptorHint.textContent = "仅 QQ WS 运行时支持该开关。";
+          txtRewardPopupInterceptorHint.textContent = "当前运行时暂未暴露奖励弹窗拦截开关。";
           return;
         }
         txtRewardPopupInterceptorHint.textContent = payload.error || payload.note || "奖励弹窗拦截状态读取失败，请稍后重试。";

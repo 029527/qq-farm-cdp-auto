@@ -21,11 +21,13 @@
     enabled: false,
     running: false,
     generation: 0,
-    intervalMs: 400,
+    intervalMs: 1200,
     waitAfter: 90,
     lastCheckAt: 0,
     lastResult: null,
-    targetViewNames: ['view_get_rewards']
+    lastRestore: null,
+    targetViewNames: ['view_get_rewards'],
+    hiddenNodeStates: new Map()
   };
 
   function out(v) {
@@ -6176,6 +6178,17 @@
       capturedProfiles: runtimeSpyState.capturedProfiles.slice(-12),
       bestProfile: getBestCapturedRuntimeProfile(),
     };
+  }
+
+  function startRuntimeSpies(opts) {
+    opts = opts || {};
+    installRuntimeSpies();
+    if (opts.interaction !== false) {
+      installInteractionManagerSpies();
+      ensureInteractionManagerSpyRetry();
+    }
+    const payload = getRuntimeSpySnapshot();
+    return opts.silent ? payload : out(payload);
   }
 
   function resetRuntimeSpyEvents(opts) {
@@ -13635,6 +13648,12 @@
     for (let i = 0; i < nodes.length; i += 1) {
       const node = nodes[i];
       if (!node) continue;
+      if (!rewardPopupInterceptorState.hiddenNodeStates.has(node)) {
+        rewardPopupInterceptorState.hiddenNodeStates.set(node, {
+          active: safeReadKey(node, 'active'),
+          opacity: typeof node.opacity === 'number' ? node.opacity : null,
+        });
+      }
       const info = {
         action: 'force_hide_node',
         path: safeCall(function () { return fullPath(node); }, null),
@@ -13657,6 +13676,39 @@
       steps.push(info);
     }
     return changed;
+  }
+
+  function restoreRewardPopupHiddenNodes(steps) {
+    let restoredCount = 0;
+    rewardPopupInterceptorState.hiddenNodeStates.forEach(function (snapshot, node) {
+      if (!node) return;
+      const before = {
+        active: safeReadKey(node, 'active'),
+        opacity: typeof node.opacity === 'number' ? node.opacity : null,
+      };
+      safeCall(function () {
+        if (snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'active')) {
+          node.active = snapshot.active;
+        }
+        if (snapshot && snapshot.opacity != null && typeof node.opacity === 'number') {
+          node.opacity = snapshot.opacity;
+        }
+        return true;
+      }, null);
+      restoredCount += 1;
+      if (Array.isArray(steps)) {
+        steps.push({
+          action: 'restore_hidden_node',
+          path: safeCall(function () { return fullPath(node); }, null),
+          beforeActive: before.active,
+          beforeOpacity: before.opacity,
+          afterActive: safeReadKey(node, 'active'),
+          afterOpacity: typeof node.opacity === 'number' ? node.opacity : null,
+        });
+      }
+    });
+    rewardPopupInterceptorState.hiddenNodeStates.clear();
+    return restoredCount;
   }
 
   async function hideGetRewardsPopup(opts) {
@@ -13753,6 +13805,8 @@
       waitAfter: rewardPopupInterceptorState.waitAfter,
       lastCheckAt: rewardPopupInterceptorState.lastCheckAt || null,
       lastResult: rewardPopupInterceptorState.lastResult || null,
+      lastRestore: rewardPopupInterceptorState.lastRestore || null,
+      hiddenNodeCount: rewardPopupInterceptorState.hiddenNodeStates.size,
       targetViewNames: rewardPopupInterceptorState.targetViewNames.slice(),
     };
     return opts.silent ? payload : out(payload);
@@ -13766,6 +13820,13 @@
       clearTimeout(rewardPopupInterceptorState.timer);
       rewardPopupInterceptorState.timer = null;
     }
+    const steps = [];
+    const restoredCount = restoreRewardPopupHiddenNodes(steps);
+    rewardPopupInterceptorState.lastRestore = {
+      at: Date.now(),
+      restoredCount: restoredCount,
+      steps: steps.slice(0, 20),
+    };
     return getRewardPopupInterceptorState(opts);
   }
 
@@ -13791,6 +13852,10 @@
       if (!rewardPopupInterceptorState.enabled || rewardPopupInterceptorState.generation !== generation) {
         return;
       }
+      const rawDelay = delayMs == null ? rewardPopupInterceptorState.intervalMs : Number(delayMs);
+      const normalizedDelay = Number.isFinite(rawDelay)
+        ? Math.max(0, rawDelay)
+        : rewardPopupInterceptorState.intervalMs;
       rewardPopupInterceptorState.timer = setTimeout(async function () {
         rewardPopupInterceptorState.timer = null;
         if (!rewardPopupInterceptorState.enabled || rewardPopupInterceptorState.generation !== generation) {
@@ -13820,12 +13885,20 @@
           rewardPopupInterceptorState.running = false;
           if (rewardPopupInterceptorState.enabled && rewardPopupInterceptorState.generation === generation) {
             schedule(rewardPopupInterceptorState.intervalMs);
+          } else if (!rewardPopupInterceptorState.enabled) {
+            const restoreSteps = [];
+            const restoredCount = restoreRewardPopupHiddenNodes(restoreSteps);
+            rewardPopupInterceptorState.lastRestore = {
+              at: Date.now(),
+              restoredCount: restoredCount,
+              steps: restoreSteps.slice(0, 20),
+            };
           }
         }
-      }, Math.max(50, Number(delayMs) || rewardPopupInterceptorState.intervalMs));
+      }, normalizedDelay);
     };
 
-    schedule(opts.delayMs == null ? 60 : opts.delayMs);
+    schedule(opts.delayMs == null ? 0 : opts.delayMs);
     return getRewardPopupInterceptorState(opts);
   }
 
@@ -14270,6 +14343,7 @@
     refreshWarehouseSnapshot,
     sellWarehouseItems,
     getRuntimeSpySnapshot,
+    startRuntimeSpies,
     resetRuntimeSpyEvents,
     captureWarehouseProtocol,
     inspectWarehouseControllerRuntime,
@@ -14316,12 +14390,14 @@
   };
 
   safeCall(function () {
-    installRuntimeSpies();
-    installInteractionManagerSpies();
-    ensureInteractionManagerSpyRetry();
+    if (G.__qqFarmAutoStartRuntimeSpies === true) {
+      startRuntimeSpies({ silent: true });
+    }
   }, null);
   safeCall(function () {
-    startReconnectWatcher({ silent: true });
+    if (G.__qqFarmAutoStartReconnectWatcher === true) {
+      startReconnectWatcher({ silent: true });
+    }
   }, null);
 
   out({
@@ -14365,6 +14441,7 @@
       'gameCtl.getReconnectWatcherState()',
       'gameCtl.startReconnectWatcher(opts)',
       'gameCtl.stopReconnectWatcher()',
+      'gameCtl.startRuntimeSpies(opts)',
       'gameCtl.openLandInteraction(path)',
       'gameCtl.inspectLandDetail(opts)',
       'gameCtl.inspectFarmModelRuntime(opts)',
