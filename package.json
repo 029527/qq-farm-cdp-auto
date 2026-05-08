@@ -1,6 +1,6 @@
 {
   "name": "qq-farm-cdp-auto",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "private": true,
   "license": "GPL-3.0",
   "description": "qq经典农场自动化控制：wmpf(Frida+CDP) + src + button.js",
