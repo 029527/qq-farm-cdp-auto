@@ -397,6 +397,7 @@ function createWindow() {
   mainWindow.setAlwaysOnTop(true, "screen-saver");
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.show();
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;

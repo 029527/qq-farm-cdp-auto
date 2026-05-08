@@ -4,6 +4,11 @@
 
 ## 2026-05-08
 
+### macOS 轻量悬浮窗入口补齐
+
+- 新增 `start-lite.sh`，macOS 下现在也可以像 Windows 轻量入口一样，在启动前选择 `Windows / macOS` 目标平台，并把结果写入 `FARM_LAUNCH_TARGET_PLATFORM`，用于 QQ 小程序默认目录匹配。
+- `desktop-sample/main.js` 已补上主窗口加载后的显式 `show()`；轻量悬浮窗在部分 macOS / Electron 场景下不再只完成加载但未实际显示。
+
 ### 仓库装饰类映射与展示补齐
 
 - `gameConfig/plant_images/stages/装饰` 下新增的 `costume_mapping.json / csv` 现已正式接入仓库物品元数据加载；即使对照表中没有 `item_id`，也会按物品名称回退命中装饰资源，不再因为缺少显式 ID 而整类失效。
