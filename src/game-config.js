@@ -130,6 +130,38 @@ function pickPrimaryStageEntry(stageEntries) {
     || null;
 }
 
+function normalizeLookupText(value) {
+  return String(value == null ? "" : value).trim().toLowerCase();
+}
+
+function collectLookupNames(...values) {
+  const seen = new Set();
+  const result = [];
+  values.forEach((value) => {
+    const text = String(value == null ? "" : value).trim();
+    if (!text) return;
+    const normalized = normalizeLookupText(text);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(text);
+  });
+  return result;
+}
+
+function getCropStageEntriesByNames(names) {
+  ensureLoaded();
+  const candidates = Array.isArray(names) ? names : [names];
+  for (const name of candidates) {
+    const normalizedName = String(name == null ? "" : name).trim();
+    if (!normalizedName) continue;
+    const stageEntries = cropStageImageMap.get(normalizedName);
+    if (Array.isArray(stageEntries) && stageEntries.length > 0) {
+      return stageEntries;
+    }
+  }
+  return null;
+}
+
 function ensureLoaded() {
   if (loaded) return;
   roleLevelConfig = readJsonFile("RoleLevel.json", []);
@@ -384,17 +416,16 @@ function formatGrowTime(seconds) {
   return `${days}天`;
 }
 
-function getSeedImagePathBySeedId(seedId) {
+function getSeedImagePathBySeedId(seedId, options = {}) {
   ensureLoaded();
   const targetId = Number(seedId) || 0;
   if (targetId <= 0) return null;
   const plant = getPlantBySeedId(targetId);
-  if (!plant || !plant.name) return null;
-  const stageEntries = cropStageImageMap.get(String(plant.name).trim());
+  const names = collectLookupNames(options.plantName, plant && plant.name);
+  if (names.length === 0) return null;
+  const stageEntries = getCropStageEntriesByNames(names);
   if (!Array.isArray(stageEntries) || stageEntries.length === 0) return null;
-  const mainEntry = stageEntries.find((item) => item.index === 0)
-    || stageEntries.find((item) => /^(作物图|主图)$/i.test(String(item.label || "").trim()))
-    || null;
+  const mainEntry = pickPrimaryStageEntry(stageEntries);
   return mainEntry && mainEntry.path ? mainEntry.path : null;
 }
 
@@ -405,8 +436,9 @@ function normalizeStageLabel(value) {
 function getPlantStageImagePathBySeedId(seedId, options = {}) {
   ensureLoaded();
   const plant = getPlantBySeedId(seedId);
-  if (!plant || !plant.name) return null;
-  const stageEntries = cropStageImageMap.get(String(plant.name).trim());
+  const names = collectLookupNames(options.plantName, plant && plant.name);
+  if (names.length === 0) return null;
+  const stageEntries = getCropStageEntriesByNames(names);
   if (!Array.isArray(stageEntries) || stageEntries.length === 0) return null;
 
   const normalizedPhaseName = normalizeStageLabel(options.phaseName);
@@ -415,7 +447,7 @@ function getPlantStageImagePathBySeedId(seedId, options = {}) {
     if (matchedByLabel && matchedByLabel.path) return matchedByLabel.path;
   }
 
-  const phases = parseGrowPhases(plant.grow_phases);
+  const phases = plant ? parseGrowPhases(plant.grow_phases) : [];
   const phaseIndex = phases.findIndex((item) => normalizeStageLabel(item.name) === normalizedPhaseName);
   if (phaseIndex >= 0) {
     const matchedByPhaseOrder = stageEntries.find((item) => item.index === (phaseIndex + 1));
@@ -459,8 +491,21 @@ function getExternalItemMetaByItemId(itemId) {
   return externalItemMetaMap.get(Number(itemId) || 0) || null;
 }
 
-function getExternalItemImagePathByItemId(itemId) {
-  const meta = getExternalItemMetaByItemId(itemId);
+function getExternalItemMetaByName(itemName) {
+  ensureLoaded();
+  const normalizedTarget = normalizeLookupText(itemName);
+  if (!normalizedTarget) return null;
+  for (const meta of externalItemMetaMap.values()) {
+    if (normalizeLookupText(meta && meta.name) === normalizedTarget) {
+      return meta;
+    }
+  }
+  return null;
+}
+
+function getExternalItemImagePathByItemId(itemId, options = {}) {
+  const meta = getExternalItemMetaByItemId(itemId)
+    || getExternalItemMetaByName(options.name || options.itemName || options.plantName);
   return meta && meta.imagePath ? meta.imagePath : null;
 }
 

@@ -825,18 +825,30 @@ function getDefaultPlantImagePath() {
   return fsSync.existsSync(DEFAULT_PLANT_IMAGE_PATH) ? DEFAULT_PLANT_IMAGE_PATH : null;
 }
 
-function buildPlantImageUrl(seedId) {
+function buildPlantImageUrl(seedId, options = {}) {
   const normalized = Number(seedId) || 0;
-  if (normalized > 0) return `/api/plant-image?seedId=${normalized}`;
+  if (normalized > 0) {
+    const params = new URLSearchParams();
+    params.set("seedId", String(normalized));
+    const plantName = String(options.plantName || "").trim();
+    if (plantName) {
+      params.set("plantName", plantName);
+    }
+    return `/api/plant-image?${params.toString()}`;
+  }
   return getDefaultPlantImagePath() ? DEFAULT_PLANT_IMAGE_URL : null;
 }
 
 function buildPlantStageImageUrl(seedId, stageOptions) {
   const normalized = Number(seedId) || 0;
-  if (normalized <= 0) return buildPlantImageUrl(seedId);
+  if (normalized <= 0) return buildPlantImageUrl(seedId, stageOptions);
   const options = stageOptions && typeof stageOptions === "object" ? stageOptions : {};
   const params = new URLSearchParams();
   params.set("seedId", String(normalized));
+  const plantName = String(options.plantName || "").trim();
+  if (plantName) {
+    params.set("plantName", plantName);
+  }
   const currentStage = Number(options.currentStage);
   if (Number.isFinite(currentStage) && currentStage > 0) {
     params.set("currentStage", String(currentStage));
@@ -942,13 +954,25 @@ function classifyWarehouseItem(itemId, itemInfo, runtimeType) {
   return "material";
 }
 
-function buildWarehouseItemImageUrl(itemId) {
+function buildWarehouseItemImageUrl(itemId, options = {}) {
   const id = Number(itemId) || 0;
   if (id <= 0) return null;
-  if (getPlantBySeedId(id)) return buildPlantImageUrl(id);
+  const itemName = String(options.itemName || options.name || "").trim();
+  if (getPlantBySeedId(id)) return buildPlantImageUrl(id, { plantName: itemName || null });
   const fruitPlant = getPlantByFruitId(id);
-  if (fruitPlant) return buildPlantImageUrl(Number(fruitPlant.seed_id) || 0);
-  if (getExternalItemImagePathByItemId(id)) return `/api/item-image?itemId=${id}`;
+  if (fruitPlant) {
+    return buildPlantImageUrl(Number(fruitPlant.seed_id) || 0, {
+      plantName: itemName || String(fruitPlant.name || "").trim() || null,
+    });
+  }
+  if (getExternalItemImagePathByItemId(id, { name: itemName })) {
+    const params = new URLSearchParams();
+    params.set("itemId", String(id));
+    if (itemName) {
+      params.set("itemName", itemName);
+    }
+    return `/api/item-image?${params.toString()}`;
+  }
   return null;
 }
 
@@ -1039,7 +1063,9 @@ function normalizeWarehouseItemForUi(raw, index) {
     canSell,
     sellItemId: runtimeSellItemId || null,
     estimateMode: fruitPlant && canEstimateSale ? "fruit_config" : (canEstimateSale ? "runtime_warehouse" : "unavailable"),
-    imageUrl: buildWarehouseItemImageUrl(itemId),
+    imageUrl: buildWarehouseItemImageUrl(itemId, {
+      itemName: name,
+    }),
     plantId: fruitPlant ? (Number(fruitPlant.id) || null) : (seedPlant ? (Number(seedPlant.id) || null) : null),
     seedId: fruitPlant ? (Number(fruitPlant.seed_id) || null) : (seedPlant ? itemId : null),
     plantName: plantName || null,
@@ -1218,6 +1244,7 @@ function normalizeLandDetail(raw, index) {
     plantName: hasPlant ? plantName : null,
     seedId: seedId > 0 ? seedId : null,
     imageUrl: buildPlantStageImageUrl(seedId, {
+      plantName: plantName || null,
       currentStage: Number(item.currentStage) || null,
       phaseName: item.phaseName || null,
     }),
@@ -4614,12 +4641,16 @@ function createGateway(config) {
     if (req.method === "GET" && urlPath === "/api/plant-image") {
       try {
         const seedId = Number(parsedUrl.searchParams.get("seedId") || "0");
+        const plantName = String(parsedUrl.searchParams.get("plantName") || "").trim();
         const currentStage = Number(parsedUrl.searchParams.get("currentStage") || "0");
         const phaseName = String(parsedUrl.searchParams.get("phaseName") || "").trim();
         const imagePath = getPlantStageImagePathBySeedId(seedId, {
+          plantName: plantName || null,
           currentStage: Number.isFinite(currentStage) && currentStage > 0 ? currentStage : null,
           phaseName: phaseName || null,
-        }) || getSeedImagePathBySeedId(seedId) || getDefaultPlantImagePath();
+        }) || getSeedImagePathBySeedId(seedId, {
+          plantName: plantName || null,
+        }) || getDefaultPlantImagePath();
         if (!imagePath) {
           res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ ok: false, error: "image not found" }));
@@ -4642,7 +4673,10 @@ function createGateway(config) {
     if (req.method === "GET" && urlPath === "/api/item-image") {
       try {
         const itemId = Number(parsedUrl.searchParams.get("itemId") || "0");
-        const imagePath = getExternalItemImagePathByItemId(itemId) || getDefaultPlantImagePath();
+        const itemName = String(parsedUrl.searchParams.get("itemName") || "").trim();
+        const imagePath = getExternalItemImagePathByItemId(itemId, {
+          name: itemName || null,
+        }) || getDefaultPlantImagePath();
         if (!imagePath) {
           res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ ok: false, error: "image not found" }));

@@ -2399,5 +2399,22 @@
       "thumb": "plant/model/v4/Crop_172_Seed.png",
       "grow_phases": "种子:14400;发芽:14400;小叶子:14400;大叶子:21600;花蕾:21600;盛开:0;"
     }
+	{
+      "level": 200,
+      "name": "艾草",
+      "seed_id": 21135,
+      "crop_id": 1021135,
+      "asset_name": "Crop_1135",
+      "rarity": 2,
+      "seasons": 2,
+      "land_level_need": 1,
+      "exp": 720,
+      "fruit_id": 41135,
+      "fruit_count": 24,
+      "phase_count": 6,
+      "phase_names": "种子|发芽|小叶子|大叶子|初熟|成熟",
+      "thumb": "plant/model/v4/Crop_1135_Seed.png",
+      "grow_phases": "种子:4800;发芽:4800;小叶子:4800;大叶子:7200;初熟:7200;成熟:0;"
+    },
   ]
 }
