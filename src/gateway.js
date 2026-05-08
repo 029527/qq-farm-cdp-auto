@@ -225,6 +225,7 @@ const FARM_CONFIG_DEFAULT = {
   autoFarmFertilizerLandTypes: ["gold", "black", "red", "normal"],
   autoFarmFertilizerIntervalSec: 30,
   autoFarmFertilizerRushThresholdSec: 300,
+  autoFarmFertilizerMaxLandsPerRun: 0,
   autoFarmFriendQuietHoursEnabled: false,
   autoFarmFriendQuietHoursStart: "23:00",
   autoFarmFriendQuietHoursEnd: "07:00",
@@ -236,7 +237,6 @@ const FARM_CONFIG_DEFAULT = {
   autoFarmFriendBlacklist: [],
   autoFarmFriendMaskedBlacklistEnabled: true,
   autoFarmFriendMaskedBlacklistMaxLevel: 1,
-  autoFarmOwnCollectConcurrentEnabled: false,
   autoFarmFriendBlockMaskedStealers: true,
   autoFarmFriendStealPlantBlacklistEnabled: false,
   autoFarmFriendStealPlantBlacklistStrategy: 1,
@@ -455,6 +455,7 @@ async function loadFarmConfig() {
       delete merged.autoFarmFertilizerBuyMax;
       delete merged.autoFarmFertilizerBuyMode;
       delete merged.autoFarmFertilizerBuyThreshold;
+      delete merged.autoFarmOwnCollectConcurrentEnabled;
       merged.autoFarmFriendStealPlantBlacklistEnabled = merged.autoFarmFriendStealPlantBlacklistEnabled === true;
       merged.autoFarmFriendStealPlantBlacklistStrategy = [1, 2].includes(Number(merged.autoFarmFriendStealPlantBlacklistStrategy))
         ? Number(merged.autoFarmFriendStealPlantBlacklistStrategy)
@@ -469,7 +470,6 @@ async function loadFarmConfig() {
       merged.autoFarmPlantBackpackForcePriority = merged.autoFarmPlantBackpackForcePriority === true;
       merged.autoFarmFriendMaskedBlacklistEnabled = merged.autoFarmFriendMaskedBlacklistEnabled === true;
       merged.autoFarmFriendMaskedBlacklistMaxLevel = Math.max(1, Number(merged.autoFarmFriendMaskedBlacklistMaxLevel) || 1);
-      merged.autoFarmOwnCollectConcurrentEnabled = merged.autoFarmOwnCollectConcurrentEnabled === true;
       merged.autoFarmOwnCollectOnlyWhenOwnFarm = merged.autoFarmOwnCollectOnlyWhenOwnFarm !== false;
       merged.autoFarmFriendStealPlantBlacklist = normalizePositiveIntList(merged.autoFarmFriendStealPlantBlacklist);
       merged.autoWarehouseSellIntervalHour = normalizeAutoWarehouseSellIntervalHour(merged.autoWarehouseSellIntervalHour);
@@ -500,6 +500,7 @@ async function saveFarmConfig(partial) {
   delete next.autoFarmFertilizerBuyMax;
   delete next.autoFarmFertilizerBuyMode;
   delete next.autoFarmFertilizerBuyThreshold;
+  delete next.autoFarmOwnCollectConcurrentEnabled;
   next.autoFarmFriendStealPlantBlacklistEnabled = next.autoFarmFriendStealPlantBlacklistEnabled === true;
   next.autoFarmFriendStealPlantBlacklistStrategy = [1, 2].includes(Number(next.autoFarmFriendStealPlantBlacklistStrategy))
     ? Number(next.autoFarmFriendStealPlantBlacklistStrategy)
@@ -514,7 +515,6 @@ async function saveFarmConfig(partial) {
   next.autoFarmPlantBackpackForcePriority = next.autoFarmPlantBackpackForcePriority === true;
   next.autoFarmFriendMaskedBlacklistEnabled = next.autoFarmFriendMaskedBlacklistEnabled === true;
   next.autoFarmFriendMaskedBlacklistMaxLevel = Math.max(1, Number(next.autoFarmFriendMaskedBlacklistMaxLevel) || 1);
-  next.autoFarmOwnCollectConcurrentEnabled = next.autoFarmOwnCollectConcurrentEnabled === true;
   next.autoFarmOwnCollectOnlyWhenOwnFarm = next.autoFarmOwnCollectOnlyWhenOwnFarm !== false;
   next.autoFarmFriendStealPlantBlacklist = normalizePositiveIntList(next.autoFarmFriendStealPlantBlacklist);
   next.autoWarehouseSellIntervalHour = normalizeAutoWarehouseSellIntervalHour(next.autoWarehouseSellIntervalHour);

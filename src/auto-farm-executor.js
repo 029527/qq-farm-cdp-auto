@@ -676,6 +676,46 @@ function getAutoFertilizerRushThresholdSec(opts) {
   return Math.floor(threshold);
 }
 
+function getAutoFertilizerMaxLandsPerRun(opts) {
+  const value = Number(opts && opts.autoFarmFertilizerMaxLandsPerRun);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.max(1, Math.floor(value));
+}
+
+function getAutoFertilizerRunBudget(opts) {
+  const target = opts && typeof opts === "object" ? opts : {};
+  const existing = target.autoFertilizerRunBudget;
+  if (existing && typeof existing === "object") {
+    existing.maxLands = getAutoFertilizerMaxLandsPerRun(target);
+    existing.usedLands = Math.max(0, Number(existing.usedLands) || 0);
+    existing.limitReached = existing.maxLands > 0 && existing.usedLands >= existing.maxLands;
+    return existing;
+  }
+  const budget = {
+    maxLands: getAutoFertilizerMaxLandsPerRun(target),
+    usedLands: 0,
+    limitReached: false,
+  };
+  budget.limitReached = budget.maxLands > 0 && budget.usedLands >= budget.maxLands;
+  target.autoFertilizerRunBudget = budget;
+  return budget;
+}
+
+function getAutoFertilizerRemainingLands(opts) {
+  const budget = getAutoFertilizerRunBudget(opts);
+  if ((Number(budget.maxLands) || 0) <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, budget.maxLands - Math.max(0, Number(budget.usedLands) || 0));
+}
+
+function consumeAutoFertilizerRunBudget(opts, count) {
+  const budget = getAutoFertilizerRunBudget(opts);
+  const delta = Math.max(0, Number(count) || 0);
+  if (delta <= 0) return budget;
+  budget.usedLands = Math.max(0, Number(budget.usedLands) || 0) + delta;
+  budget.limitReached = budget.maxLands > 0 && budget.usedLands >= budget.maxLands;
+  return budget;
+}
+
 function resolveAutoFertilizerBatchChunkSize(candidateCount, opts) {
   const total = Math.max(0, Number(candidateCount) || 0);
   const configured = Number(opts && opts.autoFertilizerBatchChunkSize);
@@ -1557,7 +1597,10 @@ async function resolveAutoFertilizerTimeoutCandidates(session, callGameCtl, opts
     const latestGrid = latestGridMap.get(landId) || null;
     if (latestGrid) {
       const observedResult = buildAutoFertilizerObservedSuccessResult(grid, latestGrid, fertilizerType, phase, "post_timeout_status_observed");
-      if (hasObservedFertilizerEffect(observedResult.result)) {
+      if (hasObservedFertilizerEffect({
+        deltaMatureInSec: observedResult.deltaMatureInSec,
+        selectedBucketDeltaCount: observedResult.selectedBucketDeltaCount,
+      })) {
         markAutoFertilizerApplied(state, grid, fertilizerType, {
           source: "post_timeout_status_observed",
           result: observedResult.result,
@@ -1749,9 +1792,11 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
   });
   const plan = collectAutoFertilizerPlan(statusBefore, opts, phase);
   const candidates = Array.isArray(plan && plan.candidates) ? plan.candidates : [];
+  const remainingLandsAtStart = getAutoFertilizerRemainingLands(opts);
   const fertilizerBatchChunkSize = resolveAutoFertilizerBatchChunkSize(candidates.length, opts);
   const actions = Array.isArray(plan && plan.skippedActions) ? [...plan.skippedActions] : [];
   let abortedReason = null;
+  let runLimitReached = Number.isFinite(remainingLandsAtStart) && remainingLandsAtStart <= 0;
   const dispatchStats = {
     batchAttemptedCount: 0,
     fallbackBatchCount: 0,
@@ -1786,14 +1831,22 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
 
   for (let groupIndex = 0; groupIndex < candidateGroups.length; groupIndex += 1) {
     throwIfAutomationStopped(opts);
+    if (getAutoFertilizerRemainingLands(opts) <= 0) {
+      runLimitReached = true;
+      break;
+    }
     const groupCandidates = candidateGroups[groupIndex];
     if (!Array.isArray(groupCandidates) || groupCandidates.length === 0) continue;
     const groupChunks = splitAutoFertilizerCandidatesIntoChunks(groupCandidates, fertilizerBatchChunkSize);
     for (let chunkIndex = 0; chunkIndex < groupChunks.length; chunkIndex += 1) {
       throwIfAutomationStopped(opts);
+      if (getAutoFertilizerRemainingLands(opts) <= 0) {
+        runLimitReached = true;
+        break;
+      }
       const groupChunk = groupChunks[chunkIndex];
       const refreshedGroup = await refreshAutoFertilizerCandidatesBeforeRun(session, callGameCtl, opts, phase, groupChunk);
-      const runnableCandidates = Array.isArray(refreshedGroup && refreshedGroup.runnableCandidates)
+      const refreshedRunnableCandidates = Array.isArray(refreshedGroup && refreshedGroup.runnableCandidates)
         ? refreshedGroup.runnableCandidates
         : [];
       const skippedActions = Array.isArray(refreshedGroup && refreshedGroup.skippedActions)
@@ -1802,6 +1855,17 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
       if (skippedActions.length > 0) {
         actions.push(...skippedActions);
       }
+      const remainingLands = getAutoFertilizerRemainingLands(opts);
+      if (remainingLands <= 0) {
+        runLimitReached = true;
+        break;
+      }
+      const runnableCandidates = Number.isFinite(remainingLands)
+        ? refreshedRunnableCandidates.slice(0, remainingLands)
+        : refreshedRunnableCandidates;
+      if (runnableCandidates.length < refreshedRunnableCandidates.length) {
+        runLimitReached = true;
+      }
       if (runnableCandidates.length === 0) continue;
 
       const fertilizerType = String(runnableCandidates[0] && runnableCandidates[0].fertilizerType || "normal").trim().toLowerCase() || "normal";
@@ -1809,6 +1873,7 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
         .map((item) => Number(item && item.landId) || 0)
         .filter((landId) => Number.isFinite(landId) && landId > 0);
       if (landIds.length === 0) continue;
+      consumeAutoFertilizerRunBudget(opts, landIds.length);
       const shouldUseBatch = batchSupported !== false && landIds.length > 1;
       if (!shouldUseBatch) {
         dispatchStats.fallbackSingleCount += runnableCandidates.length;
@@ -1825,6 +1890,10 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
           abortedReason = fallbackResult.abortedReason;
         }
         if (abortedReason) break;
+        if (runLimitReached || getAutoFertilizerRemainingLands(opts) <= 0) {
+          runLimitReached = true;
+          break;
+        }
         const isLastChunkInGroup = chunkIndex >= groupChunks.length - 1;
         const isLastGroup = groupIndex >= candidateGroups.length - 1;
         if ((!isLastChunkInGroup || !isLastGroup) && actionWaitMs > 0) {
@@ -1952,6 +2021,10 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
       }
 
       if (abortedReason) break;
+      if (runLimitReached || getAutoFertilizerRemainingLands(opts) <= 0) {
+        runLimitReached = true;
+        break;
+      }
       const isLastChunkInGroup = chunkIndex >= groupChunks.length - 1;
       const isLastGroup = groupIndex >= candidateGroups.length - 1;
       if ((!isLastChunkInGroup || !isLastGroup) && actionWaitMs > 0) {
@@ -1974,7 +2047,9 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
   return {
     phase,
     ok: failureCount === 0,
-    candidateCount: candidates.length,
+    candidateCount: Number.isFinite(remainingLandsAtStart)
+      ? Math.min(candidates.length, Math.max(0, remainingLandsAtStart))
+      : candidates.length,
     successCount,
     failureCount,
     skippedCount,
@@ -1982,6 +2057,7 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
     batchUnavailableReason,
     runtimeScriptHash: runtimeState && runtimeState.scriptHash ? String(runtimeState.scriptHash) : null,
     dispatchStats,
+    runLimitReached,
     before: summarizeFarmStatus(statusBefore),
     after: summarizeFarmStatus(statusAfter),
     aborted: !!abortedReason,
@@ -1992,6 +2068,7 @@ async function runOwnFarmFertilizerPhase(session, callGameCtl, opts, phaseName) 
 
 async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
   const mode = normalizeAutoFertilizerMode(opts && opts.autoFertilizerMode);
+  const runBudget = getAutoFertilizerRunBudget(opts);
   reportProgress(opts, `自动施肥：开始执行，策略=${mode || "none"}`, {
     module: "auto_fertilizer_task",
     mode,
@@ -2032,6 +2109,7 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
   let after = null;
   let abortedReason = null;
   let linkedHarvest = null;
+  let runLimitReached = false;
 
   getAutoFertilizerStateStore(opts);
 
@@ -2062,6 +2140,10 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
       after = phaseResult.after || after;
       if (Array.isArray(phaseResult.actions)) {
         actions.push(...phaseResult.actions);
+      }
+      if (phaseResult.runLimitReached) {
+        runLimitReached = true;
+        break;
       }
       if (phaseResult.aborted) {
         abortedReason = phaseResult.abortedReason || phase;
@@ -2120,6 +2202,10 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
         stopReason = abortedReason;
         break;
       }
+      if (runLimitReached && phaseResults.length <= beforePhaseCount) {
+        stopReason = "max_lands_per_run_reached";
+        break;
+      }
 
       const harvestResult = await runCurrentFarmOneClickTasks(session, callGameCtl, {
         includeCollect: true,
@@ -2155,6 +2241,11 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
       });
 
       after = summarizeFarmStatus(statusAfter) || after;
+
+      if (runLimitReached) {
+        stopReason = "max_lands_per_run_reached";
+        break;
+      }
 
       if (opts && opts.stopOnError) {
         const harvestFailed = Array.isArray(harvestResult && harvestResult.actions)
@@ -2207,7 +2298,7 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
   }
 
   await runPhaseSequence(seasonStartPhases);
-  if (!abortedReason) {
+  if (!abortedReason && !runLimitReached) {
     if (shouldRunAutoFertilizerHarvestLink(opts) && rushPhases.length > 0) {
       linkedHarvest = await runAutoFertilizerHarvestLinkLoop(rushPhases);
       if (linkedHarvest && linkedHarvest.ok === false && !abortedReason) {
@@ -2245,12 +2336,15 @@ async function runOwnFarmFertilizerTasks(session, callGameCtl, opts) {
     requestedMode: mode,
     executedMode: mode,
     rushThresholdSec,
+    maxLandsPerRun: runBudget.maxLands,
+    processedLandCount: Math.max(0, Number(runBudget.usedLands) || 0),
     candidateCount,
     successCount,
     failureCount,
     skippedCount,
     before,
     after,
+    runLimitReached,
     aborted: !!abortedReason,
     reason: abortedReason,
     batchUnavailableReason,
@@ -4080,10 +4174,15 @@ async function runAutoFarmCycle({ session, callGameCtl, options }) {
       autoFertilizerEnabled: opts.autoFertilizerEnabled === true,
       autoFertilizerMode: opts.autoFertilizerMode || "none",
       autoFertilizerMultiSeason: opts.autoFertilizerMultiSeason === true,
+      autoFertilizerHarvestLinkEnabled: opts.autoFertilizerHarvestLinkEnabled === true,
       autoFertilizerLandTypes: Array.isArray(opts.autoFertilizerLandTypes)
         ? [...opts.autoFertilizerLandTypes]
         : ["gold", "black", "red", "normal"],
       autoFertilizerRushThresholdSec: opts.autoFertilizerRushThresholdSec,
+      autoFarmFertilizerMaxLandsPerRun: opts.autoFarmFertilizerMaxLandsPerRun,
+      autoFertilizerBatchChunkSize: opts.autoFertilizerBatchChunkSize,
+      fertilizeBatchCallTimeoutMs: opts.fertilizeBatchCallTimeoutMs,
+      fertilizeSingleCallTimeoutMs: opts.fertilizeSingleCallTimeoutMs,
       autoFertilizerState: opts.autoFertilizerState,
       enterWaitMs: opts.enterWaitMs,
       actionWaitMs: opts.actionWaitMs,

@@ -10,6 +10,7 @@ const MESSAGE_PUSH_STATE_VERSION = 2;
 const MESSAGE_PUSH_HISTORY_LIMIT = 20;
 const ABNORMAL_DEDUP_WINDOW_MS = 60 * 60 * 1000;
 const ABNORMAL_FINGERPRINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const ABNORMAL_REPEAT_AGGREGATION_WINDOW_MS = 60 * 1000;
 const SUPPORTED_CHANNEL_TYPES = [
   "serverchan",
   "pushplus",
@@ -264,6 +265,22 @@ function formatDateTime(value) {
     String(date.getSeconds()).padStart(2, "0"),
   ].join(":");
   return `${datePart} ${timePart}`;
+}
+
+function normalizeIsoTime(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  if (Number.isNaN(date.getTime())) return new Date().toISOString();
+  return date.toISOString();
+}
+
+function formatDurationMs(durationMs) {
+  const totalSeconds = Math.max(0, Math.floor((Number(durationMs) || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`;
+  if (minutes > 0) return `${minutes}分${seconds}秒`;
+  return `${seconds}秒`;
 }
 
 function createEmptyRuntimeState() {
@@ -1060,6 +1077,63 @@ function buildAbnormalPayload(runtimeState, threshold, statusSnapshot) {
   });
 }
 
+function buildAbnormalRepeatSummaryPayload(entry) {
+  const cur = entry && typeof entry === "object" ? entry : {};
+  const lines = [
+    `异常类型：${cur.label || "通用异常"}`,
+    cur.source ? `异常来源：${cur.source}` : "",
+    `1 分钟内又出现 ${Math.max(1, Number(cur.count) || 0)} 次，已合并为一条摘要推送`,
+    cur.firstOccurredAt ? `首次出现：${formatDateTime(cur.firstOccurredAt)}` : "",
+    cur.lastOccurredAt ? `最近一次：${formatDateTime(cur.lastOccurredAt)}` : "",
+    cur.summary ? `业务判断：${cur.summary}` : "",
+    cur.lastDetail ? `最近详情：${limitText(cur.lastDetail, 300)}` : "",
+  ].filter(Boolean);
+  return createMessagePayload("abnormal", "农场异常通知", lines, {
+    abnormalType: cur.type || "exception",
+    abnormalLabel: cur.label || "通用异常",
+    abnormalSource: cur.source || null,
+    abnormalText: cur.lastDetail || null,
+    abnormalFingerprintBase: `repeat_summary:${cur.fingerprint || cur.type || "exception"}`,
+    abnormalFingerprintText: `repeat_summary:${cur.fingerprint || cur.type || "exception"}`,
+    abnormalSummary: cur.summary || null,
+    aggregated: true,
+    aggregatedCount: Math.max(1, Number(cur.count) || 0),
+  });
+}
+
+function buildRecoveryPayload(entries, recoveryText, occurredAt, statusSnapshot) {
+  const source = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const lines = [
+    occurredAt ? `恢复时间：${formatDateTime(occurredAt)}` : "",
+    recoveryText ? `恢复信号：${limitText(recoveryText, 200)}` : "",
+  ];
+  const visibleEntries = source.slice(0, 3);
+  visibleEntries.forEach((entry) => {
+    const firstMs = entry && entry.firstOccurredAt ? new Date(entry.firstOccurredAt).getTime() : Number.NaN;
+    const recoverMs = occurredAt ? new Date(occurredAt).getTime() : Date.now();
+    const durationText = Number.isNaN(firstMs) || Number.isNaN(recoverMs)
+      ? ""
+      : formatDurationMs(Math.max(0, recoverMs - firstMs));
+    const countText = Math.max(1, Number(entry && entry.count) || 0);
+    const parts = [
+      `已恢复：${entry && entry.label ? entry.label : "异常"}`,
+      durationText ? `持续 ${durationText}` : "",
+      `累计 ${countText} 次`,
+      entry && entry.source ? `来源 ${entry.source}` : "",
+    ].filter(Boolean);
+    lines.push(parts.join("，"));
+  });
+  if (source.length > visibleEntries.length) {
+    lines.push(`其余 ${source.length - visibleEntries.length} 项同类异常也已一并恢复`);
+  }
+  lines.push(...buildStatusSummaryLines(statusSnapshot));
+  return createMessagePayload("recovery", "农场异常恢复", lines.filter(Boolean), {
+    recoveredAt: occurredAt || new Date().toISOString(),
+    recoveredCount: source.length,
+    recoveryText: recoveryText || null,
+  });
+}
+
 async function buildDailyPayload(projectRoot, stats, dateKey) {
   const src = stats && typeof stats === "object" ? stats : {};
   let profile = null;
@@ -1107,6 +1181,10 @@ class MessagePushManager {
     this.lastStatusEventKey = null;
     this.abnormalPushArmed = false;
     this.abnormalPushArmedAt = null;
+    this.pendingObservationReset = false;
+    this.pendingObservationDisarm = false;
+    this.pendingAbnormalSummaries = new Map();
+    this.activeRecoverableAbnormalMap = new Map();
   }
 
   async init() {
@@ -1116,9 +1194,25 @@ class MessagePushManager {
   }
 
   updateConfig(raw) {
-    this.config = normalizeMessagePushConfig(raw);
+    const previousConfig = this.config;
+    const nextConfig = normalizeMessagePushConfig(raw);
+    const wasObservationEnabled = this._isObservationEnabled(previousConfig);
+    const nextObservationEnabled = this._isObservationEnabled(nextConfig);
+    const wasLogMonitorActive = this._isLogMonitorActive(previousConfig);
+    const nextLogMonitorActive = this._isLogMonitorActive(nextConfig);
+    this.config = nextConfig;
+    if (wasObservationEnabled && !nextObservationEnabled) {
+      this.pendingObservationDisarm = true;
+      this.pendingObservationReset = false;
+    } else if (
+      (!wasObservationEnabled && nextObservationEnabled)
+      || (!wasLogMonitorActive && nextLogMonitorActive)
+    ) {
+      this.pendingObservationReset = true;
+      this.pendingObservationDisarm = false;
+    }
     if (this.running) {
-      this._scheduleNextTick(500);
+      this._scheduleNextTick(250);
     }
     return this.config;
   }
@@ -1230,9 +1324,11 @@ class MessagePushManager {
   async _runTick() {
     try {
       const statusSnapshot = this._getStatusSnapshotSafe();
+      await this._applyPendingObservationModeChange(statusSnapshot);
       await this._refreshAbnormalPushGate(statusSnapshot);
       await this._scanLogs();
       await this._scanStatusEvents();
+      await this._flushPendingAbnormalSummaries();
       await this._maybeSendDailySummary();
       this.runtimeState.lastScanAt = new Date().toISOString();
       await this._persistState();
@@ -1248,6 +1344,16 @@ class MessagePushManager {
     } catch (_) {
       return null;
     }
+  }
+
+  _isObservationEnabled(configLike) {
+    const config = configLike && typeof configLike === "object" ? configLike : this.config;
+    return !!(config && config.enabled && config.abnormalEnabled);
+  }
+
+  _isLogMonitorActive(configLike) {
+    const config = configLike && typeof configLike === "object" ? configLike : this.config;
+    return !!(config && config.enabled && config.abnormalEnabled && config.logMonitorEnabled);
   }
 
   _isStatusSnapshotConnected(statusSnapshot) {
@@ -1268,15 +1374,61 @@ class MessagePushManager {
     return qqConnected || cdpConnected;
   }
 
-  async _refreshAbnormalPushGate(statusSnapshot) {
-    if (this.abnormalPushArmed) return;
-    if (!this._isStatusSnapshotConnected(statusSnapshot)) return;
-    await this._resetObservationCursors(statusSnapshot);
-    this.abnormalPushArmed = true;
-    this.abnormalPushArmedAt = new Date().toISOString();
+  _resetAbnormalObservationState() {
     this.runtimeState.consecutiveTimeouts = 0;
     this.runtimeState.timeoutAlertActive = false;
     this.runtimeState.recentTimeoutLines = [];
+  }
+
+  _clearAbnormalTransientState() {
+    this.pendingAbnormalSummaries.clear();
+    this.activeRecoverableAbnormalMap.clear();
+  }
+
+  _disarmAbnormalObservation() {
+    this.abnormalPushArmed = false;
+    this.abnormalPushArmedAt = null;
+    this._resetAbnormalObservationState();
+    this._clearAbnormalTransientState();
+  }
+
+  async _armAbnormalObservation(statusSnapshot) {
+    await this._resetObservationCursors(statusSnapshot);
+    this.abnormalPushArmed = true;
+    this.abnormalPushArmedAt = new Date().toISOString();
+    this._resetAbnormalObservationState();
+    this._clearAbnormalTransientState();
+  }
+
+  async _applyPendingObservationModeChange(statusSnapshot) {
+    if (this.pendingObservationDisarm) {
+      this.pendingObservationDisarm = false;
+      this.pendingObservationReset = false;
+      this._disarmAbnormalObservation();
+      await this._persistState();
+      return;
+    }
+    if (!this.pendingObservationReset) return;
+    this.pendingObservationReset = false;
+    if (!this._isObservationEnabled()) {
+      this._disarmAbnormalObservation();
+      await this._persistState();
+      return;
+    }
+    if (!this._isStatusSnapshotConnected(statusSnapshot)) {
+      this._disarmAbnormalObservation();
+      await this._persistState();
+      return;
+    }
+    await this._armAbnormalObservation(statusSnapshot);
+    await this._persistState();
+  }
+
+  async _refreshAbnormalPushGate(statusSnapshot) {
+    if (this.abnormalPushArmed) return;
+    if (!this._isObservationEnabled()) return;
+    if (!this._isStatusSnapshotConnected(statusSnapshot)) return;
+    await this._armAbnormalObservation(statusSnapshot);
   }
 
   async _resetObservationCursors(statusSnapshot) {
@@ -1314,6 +1466,7 @@ class MessagePushManager {
 
   async _scanLogs() {
     if (!(this.config.enabled && this.config.logMonitorEnabled)) return;
+    if (this.pendingObservationReset || this.pendingObservationDisarm) return;
     for (const filePath of this.logFiles) {
       const key = path.relative(this.projectRoot, filePath) || filePath;
       const cursor = this.runtimeState.logFiles[key] || { position: 0 };
@@ -1403,26 +1556,31 @@ class MessagePushManager {
       if (this.runtimeState.recentTimeoutLines.length > 5) {
         this.runtimeState.recentTimeoutLines.splice(0, this.runtimeState.recentTimeoutLines.length - 5);
       }
+      const statusSnapshot = opts.statusSnapshot || (this.getStatusSnapshot ? this.getStatusSnapshot() : null);
       if (
         !this.runtimeState.timeoutAlertActive
         && this.runtimeState.consecutiveTimeouts >= this.config.abnormalTimeoutThreshold
         && this.config.enabled
         && this.config.abnormalEnabled
       ) {
-        const payload = buildAbnormalPayload(
-          this.runtimeState,
-          this.config.abnormalTimeoutThreshold,
-          opts.statusSnapshot || (this.getStatusSnapshot ? this.getStatusSnapshot() : null),
-        );
+        const payload = buildAbnormalPayload(this.runtimeState, this.config.abnormalTimeoutThreshold, statusSnapshot);
         const channels = pickAvailableChannels(this.config);
         if (channels.length > 0) {
           await this._sendAbnormalPayload(this.config, channels, payload, opts.occurredAt || new Date().toISOString());
         }
         this.runtimeState.timeoutAlertActive = true;
+      } else if (this.runtimeState.timeoutAlertActive) {
+        const payload = buildAbnormalPayload(this.runtimeState, this.config.abnormalTimeoutThreshold, statusSnapshot);
+        this._noteRecoverableAbnormalOccurrence(buildAbnormalFingerprint(payload), payload, opts.occurredAt || new Date().toISOString());
       }
       return;
     }
     if (isRecoveryLogLine(text)) {
+      await this._notifyRecoveryIfNeeded(
+        text,
+        opts.occurredAt || new Date().toISOString(),
+        opts.statusSnapshot || (this.getStatusSnapshot ? this.getStatusSnapshot() : null),
+      );
       this.runtimeState.consecutiveTimeouts = 0;
       this.runtimeState.timeoutAlertActive = false;
       this.runtimeState.lastRecoveryAt = new Date().toISOString();
@@ -1525,12 +1683,119 @@ class MessagePushManager {
     const key = String(fingerprint || "").trim();
     if (!key) return;
     this.runtimeState.abnormalFingerprints = normalizeAbnormalFingerprintMap(this.runtimeState.abnormalFingerprints);
-    this.runtimeState.abnormalFingerprints[key] = new Date(occurredAt || Date.now()).toISOString();
+    this.runtimeState.abnormalFingerprints[key] = normalizeIsoTime(occurredAt);
+  }
+
+  _isRecoverableAbnormalPayload(payload) {
+    const meta = payload && payload.meta && typeof payload.meta === "object" ? payload.meta : {};
+    const type = String(meta.abnormalType || "").trim().toLowerCase();
+    return ["timeout_threshold", "network", "runtime"].includes(type);
+  }
+
+  _noteRecoverableAbnormalOccurrence(fingerprint, payload, occurredAt) {
+    if (!this._isRecoverableAbnormalPayload(payload)) return;
+    const key = String(fingerprint || "").trim();
+    if (!key) return;
+    const meta = payload && payload.meta && typeof payload.meta === "object" ? payload.meta : {};
+    const occurredAtIso = normalizeIsoTime(occurredAt);
+    const existing = this.activeRecoverableAbnormalMap.get(key);
+    const next = existing
+      ? { ...existing }
+      : {
+          fingerprint: key,
+          type: meta.abnormalType || payload.kind || "abnormal",
+          label: meta.abnormalLabel || payload.title || "异常",
+          source: meta.abnormalSource || "",
+          summary: meta.abnormalSummary || "",
+          firstOccurredAt: occurredAtIso,
+          lastOccurredAt: occurredAtIso,
+          count: 0,
+          lastDetail: meta.abnormalText || "",
+        };
+    next.lastOccurredAt = occurredAtIso;
+    next.count = Math.max(0, Number(next.count) || 0) + 1;
+    if (meta.abnormalLabel) next.label = meta.abnormalLabel;
+    if (meta.abnormalSource) next.source = meta.abnormalSource;
+    if (meta.abnormalSummary) next.summary = meta.abnormalSummary;
+    if (meta.abnormalText) next.lastDetail = meta.abnormalText;
+    this.activeRecoverableAbnormalMap.set(key, next);
+  }
+
+  _recordSuppressedAbnormalOccurrence(fingerprint, payload, occurredAt) {
+    const key = String(fingerprint || "").trim();
+    if (!key) return;
+    const meta = payload && payload.meta && typeof payload.meta === "object" ? payload.meta : {};
+    const occurredAtIso = normalizeIsoTime(occurredAt);
+    const existing = this.pendingAbnormalSummaries.get(key);
+    const next = existing
+      ? { ...existing }
+      : {
+          fingerprint: key,
+          type: meta.abnormalType || payload.kind || "abnormal",
+          label: meta.abnormalLabel || payload.title || "异常",
+          source: meta.abnormalSource || "",
+          summary: meta.abnormalSummary || "",
+          firstOccurredAt: occurredAtIso,
+          lastOccurredAt: occurredAtIso,
+          count: 1,
+          lastDetail: meta.abnormalText || "",
+        };
+    if (existing) {
+      next.count = Math.max(1, Number(next.count) || 0) + 1;
+      next.lastOccurredAt = occurredAtIso;
+      if (meta.abnormalText) next.lastDetail = meta.abnormalText;
+      if (meta.abnormalSummary) next.summary = meta.abnormalSummary;
+      if (meta.abnormalSource) next.source = meta.abnormalSource;
+      if (meta.abnormalLabel) next.label = meta.abnormalLabel;
+    }
+    this.pendingAbnormalSummaries.set(key, next);
+    this._noteRecoverableAbnormalOccurrence(key, payload, occurredAtIso);
+  }
+
+  async _flushPendingAbnormalSummaries() {
+    if (!(this.config.enabled && this.config.abnormalEnabled)) return;
+    if (this.pendingAbnormalSummaries.size <= 0) return;
+    const nowMs = Date.now();
+    for (const [fingerprint, entry] of this.pendingAbnormalSummaries.entries()) {
+      const lastOccurredMs = entry && entry.lastOccurredAt ? new Date(entry.lastOccurredAt).getTime() : Number.NaN;
+      if (Number.isNaN(lastOccurredMs)) {
+        this.pendingAbnormalSummaries.delete(fingerprint);
+        continue;
+      }
+      if (nowMs - lastOccurredMs < ABNORMAL_REPEAT_AGGREGATION_WINDOW_MS) continue;
+      const channels = pickAvailableChannels(this.config);
+      if (channels.length > 0) {
+        const payload = buildAbnormalRepeatSummaryPayload(entry);
+        const result = await this._sendPayload(this.config, channels, payload);
+        this.runtimeState.lastAbnormalNotificationAt = new Date().toISOString();
+        this.runtimeState.lastAbnormalNotificationText = result.summary;
+      }
+      this.pendingAbnormalSummaries.delete(fingerprint);
+    }
+  }
+
+  async _notifyRecoveryIfNeeded(recoveryText, occurredAt, statusSnapshot) {
+    const activeEntries = Array.from(this.activeRecoverableAbnormalMap.values());
+    if (activeEntries.length <= 0) return;
+    for (const entry of activeEntries) {
+      if (entry && entry.fingerprint) {
+        this.pendingAbnormalSummaries.delete(entry.fingerprint);
+      }
+    }
+    const channels = pickAvailableChannels(this.config);
+    if (channels.length > 0 && this.config.enabled && this.config.abnormalEnabled) {
+      const payload = buildRecoveryPayload(activeEntries, recoveryText, occurredAt, statusSnapshot);
+      const result = await this._sendPayload(this.config, channels, payload);
+      this.runtimeState.lastAbnormalNotificationAt = new Date().toISOString();
+      this.runtimeState.lastAbnormalNotificationText = result.summary;
+    }
+    this.activeRecoverableAbnormalMap.clear();
   }
 
   async _sendAbnormalPayload(config, channelTypes, payload, occurredAt) {
     const fingerprint = buildAbnormalFingerprint(payload);
     if (this._shouldSuppressAbnormalFingerprint(fingerprint, occurredAt)) {
+      this._recordSuppressedAbnormalOccurrence(fingerprint, payload, occurredAt);
       return {
         ok: true,
         suppressed: true,
@@ -1540,6 +1805,7 @@ class MessagePushManager {
     }
     const result = await this._sendPayload(config, channelTypes, payload);
     this._recordAbnormalFingerprint(fingerprint, occurredAt);
+    this._noteRecoverableAbnormalOccurrence(fingerprint, payload, occurredAt);
     this.runtimeState.lastAbnormalNotificationAt = new Date().toISOString();
     this.runtimeState.lastAbnormalNotificationText = result.summary;
     return {

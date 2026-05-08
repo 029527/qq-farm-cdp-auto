@@ -3315,13 +3315,6 @@
                     <small>默认开启。开启后不会为了收获主动切回自己农场，也不会抢占当前好友页画面。</small>
                   </div>
                 </label>
-                <label class="check-card inline">
-                  <input type="checkbox" id="autoOwnCollectConcurrentEnabled" />
-                  <div>
-                    <strong>并发收获（实验性）</strong>
-                    <small>开启后，自动收获会尝试在其他自动农场任务执行期间并发触发，仅建议配合“仅在自己农场页面时执行”使用，可能出现状态竞争或任务异常。</small>
-                  </div>
-                </label>
               </div>
             </div>
           </div>
@@ -3436,7 +3429,7 @@
                 <input type="checkbox" id="autoFertilizerHarvestLinkEnabled" />
                 <div>
                   <strong>催熟联动收获</strong>
-                  <small>开启后，进入催熟阈值的作物会在自动施肥阶段持续尝试自动收获，直到当前没有可催熟或已成熟待收地块。</small>
+                  <small>开启后，仅在进入催熟轮时额外拉起自动收获；非催熟施肥不会触发自动收获。</small>
                 </div>
               </label>
             </div>
@@ -3456,6 +3449,10 @@
                 <label class="field-block" id="autoFertilizerRushThresholdField">
                   <span>催熟阈值(秒)</span>
                   <input type="number" min="0" id="autoFertilizerRushThresholdSec" placeholder="300" />
+                </label>
+                <label class="field-block">
+                  <span>单轮最大地块数</span>
+                  <input type="number" min="0" id="autoFertilizerMaxLandsPerRun" placeholder="0" />
                 </label>
                 <label class="field-block">
                   <span>施肥间隔(秒)</span>
@@ -4345,7 +4342,6 @@
       const autoOwnEnabled = document.getElementById("autoOwnEnabled");
       const autoOwnCollectEnabled = document.getElementById("autoOwnCollectEnabled");
       const autoOwnCollectOnlyWhenOwnFarm = document.getElementById("autoOwnCollectOnlyWhenOwnFarm");
-      const autoOwnCollectConcurrentEnabled = document.getElementById("autoOwnCollectConcurrentEnabled");
       const autoOwnEraseGrassEnabled = document.getElementById("autoOwnEraseGrassEnabled");
       const autoOwnWaterEnabled = document.getElementById("autoOwnWaterEnabled");
       const autoOwnKillBugEnabled = document.getElementById("autoOwnKillBugEnabled");
@@ -4384,6 +4380,7 @@
       const autoFertilizerMultiSeason = document.getElementById("autoFertilizerMultiSeason");
       const autoFertilizerHarvestLinkEnabled = document.getElementById("autoFertilizerHarvestLinkEnabled");
       const autoFertilizerRushThresholdSec = document.getElementById("autoFertilizerRushThresholdSec");
+      const autoFertilizerMaxLandsPerRun = document.getElementById("autoFertilizerMaxLandsPerRun");
       const autoFertilizerIntervalSec = document.getElementById("autoFertilizerIntervalSec");
       const autoFertilizerLandTypes = document.getElementById("autoFertilizerLandTypes");
       const fertilizerStrategyFields = document.getElementById("fertilizerStrategyFields");
@@ -6544,9 +6541,6 @@
         if (autoOwnCollectOnlyWhenOwnFarm) {
           autoOwnCollectOnlyWhenOwnFarm.checked = cfg.autoFarmOwnCollectOnlyWhenOwnFarm !== false;
         }
-        if (autoOwnCollectConcurrentEnabled) {
-          autoOwnCollectConcurrentEnabled.checked = !!cfg.autoFarmOwnCollectConcurrentEnabled;
-        }
         autoOwnEraseGrassEnabled.checked = cfg.autoFarmOwnEraseGrassEnabled !== false;
         autoOwnWaterEnabled.checked = cfg.autoFarmOwnWaterEnabled !== false;
         autoOwnKillBugEnabled.checked = cfg.autoFarmOwnKillBugEnabled !== false;
@@ -6600,6 +6594,11 @@
             : (cfg.autoFarmOwnIntervalSec != null ? cfg.autoFarmOwnIntervalSec : 30);
         }
         autoFertilizerRushThresholdSec.value = cfg.autoFarmFertilizerRushThresholdSec != null ? cfg.autoFarmFertilizerRushThresholdSec : 300;
+        if (autoFertilizerMaxLandsPerRun) {
+          autoFertilizerMaxLandsPerRun.value = cfg.autoFarmFertilizerMaxLandsPerRun != null
+            ? cfg.autoFarmFertilizerMaxLandsPerRun
+            : 0;
+        }
         setCheckedFertilizerLandTypes(cfg.autoFarmFertilizerLandTypes);
         autoFriendQuietHoursEnabled.checked = !!cfg.autoFarmFriendQuietHoursEnabled;
         autoFriendQuietHoursStart.value = cfg.autoFarmFriendQuietHoursStart || "23:00";
@@ -6731,7 +6730,7 @@
         return map[mode] || String(mode || "未知策略");
       }
 
-      function getFertilizerStrategyDetailText(mode, rushThresholdSec, multiSeasonEnabled) {
+      function getFertilizerStrategyDetailText(mode, rushThresholdSec, multiSeasonEnabled, maxLandsPerRun) {
         var thresholdText = Number.isFinite(rushThresholdSec) && rushThresholdSec >= 0 ? Math.floor(rushThresholdSec) : 300;
         var parts = [];
         if (mode === "both") {
@@ -6752,10 +6751,13 @@
         } else if (mode === "organic") {
           parts.push("有机肥仅在成熟前 " + thresholdText + " 秒进入催熟轮");
         }
+        if (Number.isFinite(maxLandsPerRun) && maxLandsPerRun > 0) {
+          parts.push("单轮最多处理 " + Math.floor(maxLandsPerRun) + " 块地，达到后立即结束本轮施肥");
+        }
         return parts;
       }
 
-      function getFertilizerStrategyCompactText(mode, rushThresholdSec, multiSeasonEnabled, harvestLinkEnabled) {
+      function getFertilizerStrategyCompactText(mode, rushThresholdSec, multiSeasonEnabled, harvestLinkEnabled, maxLandsPerRun) {
         var thresholdText = Number.isFinite(rushThresholdSec) && rushThresholdSec >= 0 ? Math.floor(rushThresholdSec) : 300;
         var parts = [];
         if (mode === "both") {
@@ -6771,6 +6773,7 @@
         }
         if (multiSeasonEnabled) parts.push("多季");
         if (harvestLinkEnabled) parts.push("联动收获");
+        if (Number.isFinite(maxLandsPerRun) && maxLandsPerRun > 0) parts.push("单轮最多 " + Math.floor(maxLandsPerRun) + " 块");
         return parts.join(" · ");
       }
 
@@ -7311,7 +7314,6 @@
           autoFarmOwnEnabled: !!autoOwnEnabled.checked,
           autoFarmOwnCollectEnabled: !!(autoOwnCollectEnabled && autoOwnCollectEnabled.checked),
           autoFarmOwnCollectOnlyWhenOwnFarm: !!(autoOwnCollectOnlyWhenOwnFarm && autoOwnCollectOnlyWhenOwnFarm.checked),
-          autoFarmOwnCollectConcurrentEnabled: !!(autoOwnCollectConcurrentEnabled && autoOwnCollectConcurrentEnabled.checked),
           autoFarmOwnEraseGrassEnabled: !!(autoOwnEraseGrassEnabled && autoOwnEraseGrassEnabled.checked),
           autoFarmOwnWaterEnabled: !!(autoOwnWaterEnabled && autoOwnWaterEnabled.checked),
           autoFarmOwnKillBugEnabled: !!(autoOwnKillBugEnabled && autoOwnKillBugEnabled.checked),
@@ -7344,6 +7346,7 @@
           autoFarmFertilizerLandTypes: getCheckedFertilizerLandTypes(),
           autoFarmFertilizerIntervalSec: Number(autoFertilizerIntervalSec && autoFertilizerIntervalSec.value || 30),
           autoFarmFertilizerRushThresholdSec: Number(autoFertilizerRushThresholdSec.value || 300),
+          autoFarmFertilizerMaxLandsPerRun: Number(autoFertilizerMaxLandsPerRun && autoFertilizerMaxLandsPerRun.value || 0),
           autoFarmFriendQuietHoursEnabled: !!autoFriendQuietHoursEnabled.checked,
           autoFarmFriendQuietHoursStart: String(autoFriendQuietHoursStart.value || "23:00").trim() || "23:00",
           autoFarmFriendQuietHoursEnd: String(autoFriendQuietHoursEnd.value || "07:00").trim() || "07:00",
@@ -7375,7 +7378,6 @@
           autoFarmOwnEnabled: !!src.autoFarmOwnEnabled,
           autoFarmOwnCollectEnabled: src.autoFarmOwnCollectEnabled !== false,
           autoFarmOwnCollectOnlyWhenOwnFarm: src.autoFarmOwnCollectOnlyWhenOwnFarm !== false,
-          autoFarmOwnCollectConcurrentEnabled: !!src.autoFarmOwnCollectConcurrentEnabled,
           autoFarmOwnEraseGrassEnabled: src.autoFarmOwnEraseGrassEnabled !== false,
           autoFarmOwnWaterEnabled: src.autoFarmOwnWaterEnabled !== false,
           autoFarmOwnKillBugEnabled: src.autoFarmOwnKillBugEnabled !== false,
@@ -7408,6 +7410,7 @@
           autoFarmFertilizerLandTypes: normalizeFertilizerLandTypeList(src.autoFarmFertilizerLandTypes),
           autoFarmFertilizerIntervalSec: Number(src.autoFarmFertilizerIntervalSec != null ? src.autoFarmFertilizerIntervalSec : (src.autoFarmOwnIntervalSec != null ? src.autoFarmOwnIntervalSec : 30)),
           autoFarmFertilizerRushThresholdSec: Number(src.autoFarmFertilizerRushThresholdSec != null ? src.autoFarmFertilizerRushThresholdSec : 300),
+          autoFarmFertilizerMaxLandsPerRun: Number(src.autoFarmFertilizerMaxLandsPerRun != null ? src.autoFarmFertilizerMaxLandsPerRun : 0),
           autoFarmFriendQuietHoursEnabled: !!src.autoFarmFriendQuietHoursEnabled,
           autoFarmFriendQuietHoursStart: String(src.autoFarmFriendQuietHoursStart || "23:00").trim() || "23:00",
           autoFarmFriendQuietHoursEnd: String(src.autoFarmFriendQuietHoursEnd || "07:00").trim() || "07:00",
@@ -7538,6 +7541,7 @@
         var mode = String(autoFertilizerMode && autoFertilizerMode.value || "none");
         var lands = getCheckedFertilizerLandTypes().map(getFertilizerLandTypeLabel);
         var rushThresholdSec = Number(autoFertilizerRushThresholdSec && autoFertilizerRushThresholdSec.value || 300);
+        var maxLandsPerRun = Number(autoFertilizerMaxLandsPerRun && autoFertilizerMaxLandsPerRun.value || 0);
         var multiSeasonEnabled = !!(autoFertilizerMultiSeason && autoFertilizerMultiSeason.checked);
         var summary = [];
         if (!enabled) {
@@ -7546,12 +7550,12 @@
         }
         summary.push("当前策略: " + getFertilizerModeLabel(mode));
         summary.push("范围: " + (lands.length ? lands.join("、") : "未选择"));
-        Array.prototype.push.apply(summary, getFertilizerStrategyDetailText(mode, rushThresholdSec, multiSeasonEnabled));
+        Array.prototype.push.apply(summary, getFertilizerStrategyDetailText(mode, rushThresholdSec, multiSeasonEnabled, maxLandsPerRun));
         if (multiSeasonEnabled && mode !== "both" && mode !== "both_legacy") {
           summary.push("多季作物第 2 季起也会按当前催熟策略参与补肥");
         }
         if (autoFertilizerHarvestLinkEnabled && autoFertilizerHarvestLinkEnabled.checked) {
-          summary.push("催熟阶段会联动连续收获，直到当前无可催熟或已成熟待收地块");
+          summary.push("进入催熟轮后会额外触发自动收获，非催熟施肥不触发收获");
         }
         txtFertilizerStrategyPreview.textContent = summary.join("，");
       }
@@ -9581,7 +9585,8 @@
             fertilizerMode,
             Number(config.autoFarmFertilizerRushThresholdSec != null ? config.autoFarmFertilizerRushThresholdSec : 300),
             !!config.autoFarmFertilizerMultiSeason,
-            fertilizerHarvestLinkEnabled
+            fertilizerHarvestLinkEnabled,
+            Number(config.autoFarmFertilizerMaxLandsPerRun != null ? config.autoFarmFertilizerMaxLandsPerRun : 0)
           );
         }
 
@@ -9609,7 +9614,6 @@
             detail: ownCollectEnabled
               ? [
                   config.autoFarmOwnCollectOnlyWhenOwnFarm !== false ? "仅自己农场页面执行，不主动回家" : "允许离场时主动回家收获",
-                  config.autoFarmOwnCollectConcurrentEnabled === true ? "实验性并发收获已开启" : "",
                 ].filter(Boolean).join(" · ")
               : "未启用自动收获",
           },
@@ -11299,6 +11303,7 @@
         autoFertilizerMultiSeason,
         autoFertilizerHarvestLinkEnabled,
         autoFertilizerRushThresholdSec,
+        autoFertilizerMaxLandsPerRun,
       ].forEach(function (node) {
         if (!node) return;
         node.addEventListener("change", function () {
@@ -11365,7 +11370,6 @@
         autoOwnEnabled,
         autoOwnCollectEnabled,
         autoOwnCollectOnlyWhenOwnFarm,
-        autoOwnCollectConcurrentEnabled,
         autoOwnEraseGrassEnabled,
         autoOwnWaterEnabled,
         autoOwnKillBugEnabled,

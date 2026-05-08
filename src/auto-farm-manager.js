@@ -378,6 +378,7 @@ function normalizeAutoFarmConfig(raw) {
     autoFarmFertilizerLandTypes: normalizeFertilizerLandTypes(src.autoFarmFertilizerLandTypes),
     autoFarmFertilizerIntervalSec: toInt(src.autoFarmFertilizerIntervalSec ?? src.autoFarmOwnIntervalSec, 30, 5, 3600),
     autoFarmFertilizerRushThresholdSec: toInt(src.autoFarmFertilizerRushThresholdSec, 300, 0, 999999),
+    autoFarmFertilizerMaxLandsPerRun: toInt(src.autoFarmFertilizerMaxLandsPerRun, 0, 0, 999),
     autoFarmFertilizerBatchChunkSize: toInt(src.autoFarmFertilizerBatchChunkSize, 2, 1, 12),
     autoFarmFertilizeBatchCallTimeoutMs: toInt(src.autoFarmFertilizeBatchCallTimeoutMs, 180 * 1000, 30 * 1000, 10 * 60 * 1000),
     autoFarmFertilizeSingleCallTimeoutMs: toInt(src.autoFarmFertilizeSingleCallTimeoutMs, 90 * 1000, 15 * 1000, 10 * 60 * 1000),
@@ -396,7 +397,6 @@ function normalizeAutoFarmConfig(raw) {
       toBool(src.autoFarmFriendBlockMaskedStealers, true)
     ),
     autoFarmFriendMaskedBlacklistMaxLevel: toInt(src.autoFarmFriendMaskedBlacklistMaxLevel, 1, 1, 999),
-    autoFarmOwnCollectConcurrentEnabled: toBool(src.autoFarmOwnCollectConcurrentEnabled, false),
     autoFarmFriendStealPlantBlacklistEnabled: toBool(src.autoFarmFriendStealPlantBlacklistEnabled, false),
     autoFarmFriendStealPlantBlacklistStrategy: toInt(src.autoFarmFriendStealPlantBlacklistStrategy, 1, 1, 2),
     autoFarmFriendStealPlantBlacklist: normalizePositiveIntList(src.autoFarmFriendStealPlantBlacklist),
@@ -1067,6 +1067,12 @@ function buildAutoFarmCycleLogMessages({ due, injectState, result, cooldownAppli
           message: `自动农场 / 自己农场 / 自动施肥：失败 ${fertilizerResult.error || fertilizerResult.reason || "unknown"} · 成功 ${Number(fertilizerResult.successCount) || 0} 块，跳过 ${Number(fertilizerResult.skippedCount) || 0} 块，失败 ${Number(fertilizerResult.failureCount) || 0} 块`,
         });
       }
+      if (fertilizerResult.runLimitReached === true && Number(fertilizerResult.maxLandsPerRun) > 0) {
+        messages.push({
+          level: "info",
+          message: `自动农场 / 自己农场 / 自动施肥：达到单轮上限 ${Number(fertilizerResult.maxLandsPerRun) || 0} 块，本轮已提前结束`,
+        });
+      }
       if (fertilizerResult.batchUnavailableReason) {
         messages.push({
           level: "info",
@@ -1355,7 +1361,6 @@ class AutoFarmManager {
     this.timer = null;
     this.running = false;
     this.busy = false;
-    this.concurrentCollectBusy = false;
     this.externalRuntimeLockCount = 0;
     this.externalRuntimeLockReason = null;
     this.currentRunContext = null;
@@ -1575,7 +1580,6 @@ class AutoFarmManager {
     return {
       running: this.running,
       busy: this.busy,
-      concurrentCollectBusy: this.concurrentCollectBusy,
       runtimeExclusiveBusy: this.externalRuntimeLockCount > 0,
       runtimeExclusiveReason: this.externalRuntimeLockReason,
       nextRunAt: this.nextRunAt,
@@ -2178,6 +2182,9 @@ class AutoFarmManager {
       autoFertilizerRushThresholdSec: this.config.autoFarmFertilizerRushThresholdSec != null
         ? this.config.autoFarmFertilizerRushThresholdSec
         : 300,
+      autoFarmFertilizerMaxLandsPerRun: this.config.autoFarmFertilizerMaxLandsPerRun != null
+        ? this.config.autoFarmFertilizerMaxLandsPerRun
+        : 0,
       autoFertilizerBatchChunkSize: this.config.autoFarmFertilizerBatchChunkSize,
       fertilizeBatchCallTimeoutMs: this.config.autoFarmFertilizeBatchCallTimeoutMs,
       fertilizeSingleCallTimeoutMs: this.config.autoFarmFertilizeSingleCallTimeoutMs,
@@ -2375,9 +2382,6 @@ class AutoFarmManager {
 
   async _tick() {
     if (!this.running) return;
-    if (this.busy && this._shouldRunConcurrentCollect(Date.now())) {
-      void this._runConcurrentCollectCycle().catch(() => {});
-    }
     if (this.busy || this.externalRuntimeLockCount > 0) {
       this._schedule(500);
       return;
@@ -2439,89 +2443,6 @@ class AutoFarmManager {
 
   async _callGameCtlDirect(session, pathName, args, callOptions) {
     return await callGameCtl(session, pathName, args, callOptions);
-  }
-
-  _shouldRunConcurrentCollect(now) {
-    const baseNow = Number(now) || Date.now();
-    if (this.config.autoFarmOwnCollectConcurrentEnabled !== true) return false;
-    if (this.externalRuntimeLockCount > 0) return false;
-    if (this.concurrentCollectBusy) return false;
-    if (!this._isTaskEnabled("own_collect")) return false;
-    if (this.currentRunContext && this.currentRunContext.taskId === "own_collect") return false;
-    const dueAtMs = this._getTaskDueAtMs("own_collect", baseNow, false);
-    return Number.isFinite(dueAtMs) && dueAtMs != null && dueAtMs <= baseNow;
-  }
-
-  async _runConcurrentCollectCycle() {
-    const taskId = "own_collect";
-    const taskLabel = `${this._getTaskLabel(taskId)}(并发实验)`;
-    const now = Date.now();
-    const runtimeTaskState = this._getTaskState(taskId);
-    this.concurrentCollectBusy = true;
-    runtimeTaskState.busy = true;
-    runtimeTaskState.lastStartedAt = new Date().toISOString();
-    this._setTaskLastRunAt(taskId, now);
-    this._pushEvent("warn", `自动农场 / 任务开始：${taskLabel}`, {
-      category: "task_start_concurrent",
-      taskId,
-      taskLabel,
-    });
-    const runContext = {
-      cancelled: false,
-      reason: null,
-      taskId,
-      taskLabel,
-      concurrent: true,
-    };
-    try {
-      const session = await this.ensureSession();
-      await this.ensureGameCtlImpl(session);
-      const result = await runAutoFarmCycle({
-        session,
-        callGameCtl: this.callGameCtlImpl.bind(this),
-        options: {
-          ...this._buildTaskCycleOptions(taskId, runContext),
-          reportProgress: (event) => {
-            if (!event || !event.message) return;
-            this._pushEvent(event.level || "info", `自动农场 / 自动收获 / ${event.message}`, {
-              category: "task_progress_concurrent",
-              taskId,
-              taskLabel,
-              event,
-            });
-          },
-        },
-      });
-      mergeCycleResultIntoTodayStats(this.todayStats, result);
-      this.todayStatsHistory[this.todayStats.dateKey] = normalizeTodayStats(this.todayStats, this.todayStats.dateKey);
-      this.todayStatsHistory = pruneTodayStatsHistoryMap(this.todayStatsHistory);
-      await this._persistTodayStats("concurrent_collect_cycle");
-      runtimeTaskState.lastFinishedAt = new Date().toISOString();
-      runtimeTaskState.lastSuccessAt = runtimeTaskState.lastFinishedAt;
-      runtimeTaskState.lastDurationMs = Math.max(0, Date.now() - now);
-      runtimeTaskState.lastError = null;
-      runtimeTaskState.runCount += 1;
-      runtimeTaskState.lastResultSummary = this._buildTaskResultSummary(taskId, result, null);
-      this._pushEvent("warn", `自动农场 / 任务结束：${taskLabel}`, {
-        category: "task_done_concurrent",
-        taskId,
-        taskLabel,
-      });
-    } catch (error) {
-      const message = toErrorMessage(error);
-      runtimeTaskState.lastFinishedAt = new Date().toISOString();
-      runtimeTaskState.lastDurationMs = Math.max(0, Date.now() - now);
-      runtimeTaskState.lastError = message;
-      runtimeTaskState.lastResultSummary = this._buildTaskResultSummary(taskId, null, message);
-      this._pushEvent("error", `自动农场 / 并发收获失败：${message}`, {
-        category: "task_failed_concurrent",
-        taskId,
-        taskLabel,
-      });
-    } finally {
-      runtimeTaskState.busy = false;
-      this.concurrentCollectBusy = false;
-    }
   }
 
   async _runCycle(force, taskId) {
