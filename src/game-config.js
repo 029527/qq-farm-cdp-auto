@@ -18,6 +18,7 @@ const fruitToPlant = new Map();
 const itemInfoMap = new Map();
 const cropStageImageMap = new Map();
 const externalItemMetaMap = new Map();
+const externalItemNameMetaMap = new Map();
 const cropFallbackPlantMap = new Map();
 const cropFallbackSeedMap = new Map();
 const cropFallbackFruitMap = new Map();
@@ -28,20 +29,77 @@ function readJsonFile(filename, fallback) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function normalizeOptionalText(value) {
+  const text = String(value == null ? "" : value).trim();
+  return text || null;
+}
+
+function mergeExternalItemMetaRecord(current, payload, explicitItemId = null) {
+  const base = current && typeof current === "object" ? current : {};
+  const itemId = Number(explicitItemId) > 0
+    ? Number(explicitItemId)
+    : (Number(base.itemId) || Number(payload && payload.itemId) || 0);
+  return {
+    itemId,
+    name: normalizeOptionalText(payload && payload.name) || normalizeOptionalText(base.name),
+    level: payload && payload.level != null ? (Number(payload.level) || null) : (base.level ?? null),
+    rarity: payload && payload.rarity != null ? (Number(payload.rarity) || null) : (base.rarity ?? null),
+    type: payload && payload.type != null ? (Number(payload.type) || null) : (base.type ?? null),
+    interactionType: normalizeOptionalText(payload && payload.interactionType) || normalizeOptionalText(base.interactionType),
+    assetCategory: normalizeOptionalText(payload && payload.assetCategory) || normalizeOptionalText(base.assetCategory),
+    sectionName: normalizeOptionalText(payload && payload.sectionName) || normalizeOptionalText(base.sectionName),
+    sectionDesc: normalizeOptionalText(payload && payload.sectionDesc) || normalizeOptionalText(base.sectionDesc),
+    itemDesc: normalizeOptionalText(payload && payload.itemDesc) || normalizeOptionalText(base.itemDesc),
+    imagePath: normalizeOptionalText(payload && payload.imagePath) || normalizeOptionalText(base.imagePath),
+    imageUrl: normalizeOptionalText(payload && payload.imageUrl) || normalizeOptionalText(base.imageUrl),
+  };
+}
+
+function upsertExternalItemMetaByName(itemName, payload) {
+  const normalizedName = normalizeLookupText(itemName);
+  if (!normalizedName || !payload || typeof payload !== "object") return;
+  const current = externalItemNameMetaMap.get(normalizedName) || {};
+  const next = mergeExternalItemMetaRecord(current, {
+    ...payload,
+    name: normalizeOptionalText(itemName) || payload.name || null,
+  });
+  externalItemNameMetaMap.set(normalizedName, next);
+}
+
 function upsertExternalItemMeta(itemId, payload) {
   const normalizedId = Number(itemId) || 0;
-  if (normalizedId <= 0 || !payload || typeof payload !== "object") return;
-  const current = externalItemMetaMap.get(normalizedId) || {};
-  externalItemMetaMap.set(normalizedId, {
-    itemId: normalizedId,
-    name: payload.name || current.name || null,
-    level: payload.level != null ? (Number(payload.level) || null) : (current.level ?? null),
-    rarity: payload.rarity != null ? (Number(payload.rarity) || null) : (current.rarity ?? null),
-    type: payload.type != null ? (Number(payload.type) || null) : (current.type ?? null),
-    interactionType: String(payload.interactionType || current.interactionType || "").trim() || null,
-    assetCategory: payload.assetCategory || current.assetCategory || null,
-    imagePath: payload.imagePath || current.imagePath || null,
-  });
+  if (!payload || typeof payload !== "object") return;
+  if (normalizedId > 0) {
+    const current = externalItemMetaMap.get(normalizedId) || {};
+    const next = mergeExternalItemMetaRecord(current, payload, normalizedId);
+    externalItemMetaMap.set(normalizedId, next);
+    if (next.name) upsertExternalItemMetaByName(next.name, next);
+    return;
+  }
+  if (payload.name) upsertExternalItemMetaByName(payload.name, payload);
+}
+
+function getExternalMappingItemName(item) {
+  return normalizeOptionalText(item && (item.name || item.item_name || item.image_alt));
+}
+
+function resolveExternalImageSources(dirPath, name, item, imageByBaseName, imageByNestedDirName) {
+  const resolvedName = normalizeOptionalText(name);
+  const remoteImageUrl = normalizeOptionalText(item && (item.image_url || item.imageUrl));
+  let localImagePath = (resolvedName && imageByBaseName.get(resolvedName))
+    || (resolvedName && imageByNestedDirName.get(resolvedName))
+    || null;
+  const mappedLocalPath = normalizeOptionalText(item && item.local_path);
+  if (!localImagePath && mappedLocalPath) {
+    const candidate = path.join(dirPath, ...mappedLocalPath.split(/[\\/]+/).filter(Boolean));
+    if (fs.existsSync(candidate)) {
+      localImagePath = candidate;
+    }
+  }
+  return {
+    imagePath: localImagePath,
+    imageUrl: remoteImageUrl,
+  };
 }
 
 function buildFallbackPlantFromCropMapping(item, existingPlant) {
@@ -174,6 +232,7 @@ function ensureLoaded() {
   itemInfoMap.clear();
   cropStageImageMap.clear();
   externalItemMetaMap.clear();
+  externalItemNameMetaMap.clear();
   cropFallbackPlantMap.clear();
   cropFallbackSeedMap.clear();
   cropFallbackFruitMap.clear();
@@ -267,20 +326,26 @@ function ensureLoaded() {
           const items = Array.isArray(parsed && parsed.items) ? parsed.items : [];
           items.forEach((item) => {
             const itemId = Number(item && (item.item_id || item.id)) || 0;
-            if (itemId <= 0) return;
-            const name = String(item && item.name || "").trim();
-            const imagePath = (name && imageByBaseName.get(name))
-              || (name && imageByNestedDirName.get(name))
-              || null;
-            upsertExternalItemMeta(itemId, {
+            const name = getExternalMappingItemName(item);
+            const imageSource = resolveExternalImageSources(dirPath, name, item, imageByBaseName, imageByNestedDirName);
+            const payload = {
               name,
               level: item && item.level,
               rarity: item && item.rarity,
               type: item && item.type,
               interactionType: item && item.interaction_type,
               assetCategory: dirName,
-              imagePath,
-            });
+              sectionName: item && item.section_name,
+              sectionDesc: item && item.section_desc,
+              itemDesc: item && (item.item_desc || item.desc),
+              imagePath: imageSource.imagePath,
+              imageUrl: imageSource.imageUrl,
+            };
+            if (itemId > 0) {
+              upsertExternalItemMeta(itemId, payload);
+            } else if (name) {
+              upsertExternalItemMetaByName(name, payload);
+            }
           });
         });
     });
@@ -485,15 +550,19 @@ function getItemInfoById(itemId) {
   return itemInfoMap.get(Number(itemId) || 0) || null;
 }
 
-function getExternalItemMetaByItemId(itemId) {
+function getExternalItemMetaByItemId(itemId, options = {}) {
   ensureLoaded();
-  return externalItemMetaMap.get(Number(itemId) || 0) || null;
+  const byId = externalItemMetaMap.get(Number(itemId) || 0) || null;
+  if (byId) return byId;
+  return getExternalItemMetaByName(options.name || options.itemName || options.plantName) || null;
 }
 
 function getExternalItemMetaByName(itemName) {
   ensureLoaded();
   const normalizedTarget = normalizeLookupText(itemName);
   if (!normalizedTarget) return null;
+  const direct = externalItemNameMetaMap.get(normalizedTarget);
+  if (direct) return direct;
   for (const meta of externalItemMetaMap.values()) {
     if (normalizeLookupText(meta && meta.name) === normalizedTarget) {
       return meta;
@@ -505,7 +574,7 @@ function getExternalItemMetaByName(itemName) {
 function getExternalItemImagePathByItemId(itemId, options = {}) {
   const meta = getExternalItemMetaByItemId(itemId)
     || getExternalItemMetaByName(options.name || options.itemName || options.plantName);
-  return meta && meta.imagePath ? meta.imagePath : null;
+  return meta && (meta.imagePath || meta.imageUrl) ? (meta.imagePath || meta.imageUrl) : null;
 }
 
 function getAllItemInfo() {

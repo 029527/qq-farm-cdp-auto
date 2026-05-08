@@ -968,6 +968,7 @@ function getWarehouseCategoryLabel(category) {
   if (key === "fertilizer") return "化肥";
   if (key === "tool") return "道具";
   if (key === "material") return "材料";
+  if (key === "decor") return "装饰";
   return "其他";
 }
 
@@ -977,7 +978,9 @@ function classifyWarehouseItem(itemId, itemInfo, runtimeType) {
   if (getPlantBySeedId(id)) return "seed";
   const name = String(itemInfo && itemInfo.name || "").trim();
   const interaction = String(itemInfo && itemInfo.interaction_type || "").trim().toLowerCase();
+  const assetCategory = String(itemInfo && itemInfo.assetCategory || "").trim();
   const type = Number(itemInfo && itemInfo.type) || Number(runtimeType) || 0;
+  if (assetCategory === "装饰") return "decor";
   if (WAREHOUSE_ACTIVITY_CURRENCY_ITEM_IDS.has(id)) return "currency";
   if (type === 19) return "currency";
   if (type === 2 && /金币|点券|钻石|金豆|货币/.test(name)) return "currency";
@@ -1000,7 +1003,11 @@ function buildWarehouseItemImageUrl(itemId, options = {}) {
       plantName: itemName || String(fruitPlant.name || "").trim() || null,
     });
   }
-  if (getExternalItemImagePathByItemId(id, { name: itemName })) {
+  const externalImageSource = getExternalItemImagePathByItemId(id, { name: itemName });
+  if (externalImageSource) {
+    if (/^https?:\/\//i.test(externalImageSource)) {
+      return externalImageSource;
+    }
     const params = new URLSearchParams();
     params.set("itemId", String(id));
     if (itemName) {
@@ -1016,8 +1023,15 @@ function mergeWarehouseItemMeta(itemInfo, externalItemMeta) {
   const extra = externalItemMeta && typeof externalItemMeta === "object" ? externalItemMeta : null;
   if (!base && !extra) return null;
   const preferExternal = !!(extra && Number(extra.type) === 17);
+  const mergeText = (first, second) => String(first || second || "").trim();
   return {
     ...(base || {}),
+    assetCategory: mergeText(base && base.assetCategory, extra && extra.assetCategory) || null,
+    sectionName: mergeText(base && base.sectionName, extra && extra.sectionName) || null,
+    sectionDesc: mergeText(base && base.sectionDesc, extra && extra.sectionDesc) || null,
+    itemDesc: mergeText(base && base.itemDesc, extra && extra.itemDesc) || null,
+    imagePath: mergeText(base && base.imagePath, extra && extra.imagePath) || null,
+    imageUrl: mergeText(base && base.imageUrl, extra && extra.imageUrl) || null,
     name: preferExternal
       ? (extra && extra.name) || (base && base.name) || ""
       : (base && base.name) || (extra && extra.name) || "",
@@ -1065,13 +1079,15 @@ function normalizeWarehouseItemForUi(raw, index) {
   if (itemId <= 0 || count <= 0) return null;
 
   const itemInfo = getItemInfoById(itemId);
-  const externalItemMeta = getExternalItemMetaByItemId(itemId);
+  const runtimeName = item.name ? String(item.name) : "";
+  const externalItemMeta = getExternalItemMetaByItemId(itemId, {
+    name: runtimeName || (itemInfo && itemInfo.name) || null,
+  });
   const fruitPlant = getPlantByFruitId(itemId);
   const seedPlant = getPlantBySeedId(itemId);
   const mergedItemInfo = mergeWarehouseItemMeta(itemInfo, externalItemMeta);
   const category = classifyWarehouseItem(itemId, mergedItemInfo, item.type);
   const configuredName = mergedItemInfo && mergedItemInfo.name ? String(mergedItemInfo.name) : "";
-  const runtimeName = item.name ? String(item.name) : "";
   const plantName = fruitPlant && fruitPlant.name ? String(fruitPlant.name) : (seedPlant && seedPlant.name ? String(seedPlant.name) : "");
   const name = runtimeName || configuredName || (plantName ? `${plantName}${category === "seed" ? "种子" : "果实"}` : `物品 ${itemId}`);
   const runtimeSaleUnitPrice = Number(item.saleUnitPrice || item.sellPrice || item.price) || 0;
@@ -1092,6 +1108,8 @@ function normalizeWarehouseItemForUi(raw, index) {
     type: Number(mergedItemInfo && mergedItemInfo.type) || Number(item.type) || null,
     rarity: Number(mergedItemInfo && mergedItemInfo.rarity) || Number(item.rarity) || null,
     level: Number(mergedItemInfo && mergedItemInfo.level) || Number(item.level) || null,
+    sectionName: mergedItemInfo && mergedItemInfo.sectionName ? String(mergedItemInfo.sectionName) : null,
+    itemDesc: mergedItemInfo && mergedItemInfo.itemDesc ? String(mergedItemInfo.itemDesc) : null,
     saleUnitPrice,
     estimatedSellPrice,
     canEstimateSale,

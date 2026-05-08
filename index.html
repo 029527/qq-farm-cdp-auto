@@ -3687,6 +3687,7 @@
                 <option value="fertilizer">化肥</option>
                 <option value="currency">货币</option>
                 <option value="tool">道具</option>
+                <option value="decor">装饰</option>
                 <option value="other">其他</option>
               </select>
             </label>
@@ -6522,6 +6523,7 @@
         if (key === "fertilizer") return "化肥";
         if (key === "tool") return "道具";
         if (key === "material") return "材料";
+        if (key === "decor") return "装饰";
         return "其他";
       }
 
@@ -8712,13 +8714,14 @@
         return list.filter(function (item) {
           if (!item) return false;
           if (filterValue === "sellable" && !item.canEstimateSale) return false;
-          if (["fruit", "seed", "material", "fertilizer", "currency", "tool", "other"].indexOf(filterValue) >= 0) {
+          if (["fruit", "seed", "material", "fertilizer", "currency", "tool", "decor", "other"].indexOf(filterValue) >= 0) {
             if (String(item.category || "") !== filterValue) return false;
           }
           if (!keyword) return true;
           var haystack = [
             item.name,
             item.plantName,
+            item.sectionName,
             item.categoryLabel,
             item.itemId != null ? String(item.itemId) : "",
           ].join(" ").toLowerCase();
@@ -8871,6 +8874,7 @@
               : '<span class="warehouse-tag warn">暂无卖价</span>',
           ];
           if (item && item.plantName) tags.push('<span class="warehouse-tag">' + escapeHtml(item.plantName) + '</span>');
+          if (item && item.sectionName) tags.push('<span class="warehouse-tag">' + escapeHtml(item.sectionName) + '</span>');
           if (item && item.level != null && Number(item.level) > 0) tags.push('<span class="warehouse-tag">Lv.' + escapeHtml(item.level) + '</span>');
           if (item && Array.isArray(item.sourceTabNames) && item.sourceTabNames.length) {
             tags.push('<span class="warehouse-tag">页签 ' + escapeHtml(item.sourceTabNames.join(" / ")) + '</span>');
