@@ -3283,8 +3283,12 @@
                 <input type="number" min="10" id="autoFriendHelpIntervalSec" placeholder="90" />
               </label>
               <label class="field-block">
-                <span>每轮好友数</span>
-                <input type="number" min="1" id="autoMaxFriends" placeholder="5" />
+                <span>偷菜每轮好友数(0=全部)</span>
+                <input type="number" min="0" id="autoFriendStealMaxFriends" placeholder="0" />
+              </label>
+              <label class="field-block">
+                <span>帮忙每轮好友数</span>
+                <input type="number" min="1" id="autoFriendHelpMaxFriends" placeholder="5" />
               </label>
               <label class="field-block">
                 <span>进场等待(ms)</span>
@@ -4473,7 +4477,8 @@
       const autoOwnCollectIntervalSec = document.getElementById("autoOwnCollectIntervalSec");
       const autoFriendStealIntervalSec = document.getElementById("autoFriendStealIntervalSec");
       const autoFriendHelpIntervalSec = document.getElementById("autoFriendHelpIntervalSec");
-      const autoMaxFriends = document.getElementById("autoMaxFriends");
+      const autoFriendStealMaxFriends = document.getElementById("autoFriendStealMaxFriends");
+      const autoFriendHelpMaxFriends = document.getElementById("autoFriendHelpMaxFriends");
       const autoEnterWaitMs = document.getElementById("autoEnterWaitMs");
       const autoActionWaitMs = document.getElementById("autoActionWaitMs");
       const autoStopOnError = document.getElementById("autoStopOnError");
@@ -6734,7 +6739,12 @@
         autoFriendHelpIntervalSec.value = cfg.autoFarmFriendHelpIntervalSec != null
           ? cfg.autoFarmFriendHelpIntervalSec
           : (cfg.autoFarmFriendIntervalSec != null ? cfg.autoFarmFriendIntervalSec : 90);
-        autoMaxFriends.value = cfg.autoFarmMaxFriends != null ? cfg.autoFarmMaxFriends : 5;
+        autoFriendStealMaxFriends.value = cfg.autoFarmFriendStealMaxFriends != null
+          ? cfg.autoFarmFriendStealMaxFriends
+          : (cfg.autoFarmMaxFriends != null ? cfg.autoFarmMaxFriends : 0);
+        autoFriendHelpMaxFriends.value = cfg.autoFarmFriendHelpMaxFriends != null
+          ? cfg.autoFarmFriendHelpMaxFriends
+          : (cfg.autoFarmMaxFriends != null ? cfg.autoFarmMaxFriends : 5);
         autoEnterWaitMs.value = cfg.autoFarmEnterWaitMs != null ? cfg.autoFarmEnterWaitMs : 1800;
         autoActionWaitMs.value = cfg.autoFarmActionWaitMs != null ? cfg.autoFarmActionWaitMs : 1200;
         autoStopOnError.checked = !!cfg.autoFarmStopOnError;
@@ -7508,7 +7518,8 @@
           autoFarmOwnCollectIntervalSec: Number(autoOwnCollectIntervalSec && autoOwnCollectIntervalSec.value || 30),
           autoFarmFriendStealIntervalSec: Number(autoFriendStealIntervalSec.value || 90),
           autoFarmFriendHelpIntervalSec: Number(autoFriendHelpIntervalSec.value || 90),
-          autoFarmMaxFriends: Number(autoMaxFriends.value || 5),
+          autoFarmFriendStealMaxFriends: Number(autoFriendStealMaxFriends && autoFriendStealMaxFriends.value || 0),
+          autoFarmFriendHelpMaxFriends: Number(autoFriendHelpMaxFriends && autoFriendHelpMaxFriends.value || 5),
           autoFarmEnterWaitMs: Number(autoEnterWaitMs.value || 1800),
           autoFarmActionWaitMs: Number(autoActionWaitMs.value || 1200),
           autoFarmStopOnError: !!autoStopOnError.checked,
@@ -7576,7 +7587,16 @@
           autoFarmOwnCollectIntervalSec: Number(src.autoFarmOwnCollectIntervalSec != null ? src.autoFarmOwnCollectIntervalSec : (src.autoFarmOwnIntervalSec != null ? src.autoFarmOwnIntervalSec : 30)),
           autoFarmFriendStealIntervalSec: Number(src.autoFarmFriendStealIntervalSec != null ? src.autoFarmFriendStealIntervalSec : (src.autoFarmFriendIntervalSec != null ? src.autoFarmFriendIntervalSec : 90)),
           autoFarmFriendHelpIntervalSec: Number(src.autoFarmFriendHelpIntervalSec != null ? src.autoFarmFriendHelpIntervalSec : (src.autoFarmFriendIntervalSec != null ? src.autoFarmFriendIntervalSec : 90)),
-          autoFarmMaxFriends: Number(src.autoFarmMaxFriends != null ? src.autoFarmMaxFriends : 5),
+          autoFarmFriendStealMaxFriends: Number(
+            src.autoFarmFriendStealMaxFriends != null
+              ? src.autoFarmFriendStealMaxFriends
+              : (src.autoFarmMaxFriends != null ? src.autoFarmMaxFriends : 0)
+          ),
+          autoFarmFriendHelpMaxFriends: Number(
+            src.autoFarmFriendHelpMaxFriends != null
+              ? src.autoFarmFriendHelpMaxFriends
+              : (src.autoFarmMaxFriends != null ? src.autoFarmMaxFriends : 5)
+          ),
           autoFarmEnterWaitMs: Number(src.autoFarmEnterWaitMs != null ? src.autoFarmEnterWaitMs : 1800),
           autoFarmActionWaitMs: Number(src.autoFarmActionWaitMs != null ? src.autoFarmActionWaitMs : 1200),
           autoFarmStopOnError: !!src.autoFarmStopOnError,

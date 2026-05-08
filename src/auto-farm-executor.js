@@ -3474,7 +3474,8 @@ async function runOwnFarmAutomation(session, callGameCtl, opts) {
 async function runFriendStealAutomation(session, callGameCtl, opts) {
   const enterWaitMs = Math.max(0, Number(opts && opts.enterWaitMs) || 0);
   const actionWaitMs = Math.max(0, Number(opts && opts.actionWaitMs) || 0);
-  const maxFriends = Math.max(0, Number(opts && opts.maxFriends) || 0) || 5;
+  const parsedMaxFriends = Number.parseInt(String(opts && opts.maxFriends != null ? opts.maxFriends : ""), 10);
+  const maxFriends = Number.isFinite(parsedMaxFriends) ? Math.max(0, parsedMaxFriends) : 5;
   const stealEnabled = !!(opts && opts.friendStealEnabled === true);
   const helpEnabled = !!(opts && opts.friendHelpEnabled === true);
   const helpDailyLimit = resolveFriendHelpDailyLimit(opts && opts.friendHelpDailyLimit);
@@ -3617,7 +3618,7 @@ async function runFriendStealAutomation(session, callGameCtl, opts) {
       return canSteal || canHelp;
     })
     .sort(compareFriendPriority)
-    .slice(0, maxFriends);
+    .slice(0, maxFriends > 0 ? maxFriends : undefined);
   const visits = [];
   reportProgress(opts, `好友巡查：可操作好友 ${candidates.length} 位`, {
     module: "friend_patrol",

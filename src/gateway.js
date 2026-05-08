@@ -205,7 +205,8 @@ const FARM_CONFIG_DEFAULT = {
   autoFarmPlantIntervalSec: 30,
   autoFarmFriendStealIntervalSec: 90,
   autoFarmFriendHelpIntervalSec: 90,
-  autoFarmMaxFriends: 5,
+  autoFarmFriendStealMaxFriends: 0,
+  autoFarmFriendHelpMaxFriends: 5,
   autoFarmEnterWaitMs: 1800,
   autoFarmActionWaitMs: 1200,
   autoFarmRefreshFriendList: true,
@@ -440,6 +441,12 @@ function autoFertilizerStatePath() {
   return path.join(__dirname, "..", "data", "auto-fertilizer-state.json");
 }
 
+function normalizeFriendTaskMaxFriends(value, defaultValue, min, max) {
+  const n = Number.parseInt(String(value ?? ""), 10);
+  const fallback = Number.isFinite(n) ? n : defaultValue;
+  return Math.min(max, Math.max(min, fallback));
+}
+
 async function loadFarmConfig() {
   try {
     const raw = await fs.readFile(farmConfigPath(), "utf8");
@@ -456,6 +463,18 @@ async function loadFarmConfig() {
       delete merged.autoFarmFertilizerBuyMode;
       delete merged.autoFarmFertilizerBuyThreshold;
       delete merged.autoFarmOwnCollectConcurrentEnabled;
+      merged.autoFarmFriendStealMaxFriends = normalizeFriendTaskMaxFriends(
+        merged.autoFarmFriendStealMaxFriends ?? merged.autoFarmMaxFriends,
+        0,
+        0,
+        50
+      );
+      merged.autoFarmFriendHelpMaxFriends = normalizeFriendTaskMaxFriends(
+        merged.autoFarmFriendHelpMaxFriends ?? merged.autoFarmMaxFriends,
+        5,
+        1,
+        50
+      );
       merged.autoFarmFriendStealPlantBlacklistEnabled = merged.autoFarmFriendStealPlantBlacklistEnabled === true;
       merged.autoFarmFriendStealPlantBlacklistStrategy = [1, 2].includes(Number(merged.autoFarmFriendStealPlantBlacklistStrategy))
         ? Number(merged.autoFarmFriendStealPlantBlacklistStrategy)
@@ -501,6 +520,18 @@ async function saveFarmConfig(partial) {
   delete next.autoFarmFertilizerBuyMode;
   delete next.autoFarmFertilizerBuyThreshold;
   delete next.autoFarmOwnCollectConcurrentEnabled;
+  next.autoFarmFriendStealMaxFriends = normalizeFriendTaskMaxFriends(
+    next.autoFarmFriendStealMaxFriends ?? next.autoFarmMaxFriends,
+    0,
+    0,
+    50
+  );
+  next.autoFarmFriendHelpMaxFriends = normalizeFriendTaskMaxFriends(
+    next.autoFarmFriendHelpMaxFriends ?? next.autoFarmMaxFriends,
+    5,
+    1,
+    50
+  );
   next.autoFarmFriendStealPlantBlacklistEnabled = next.autoFarmFriendStealPlantBlacklistEnabled === true;
   next.autoFarmFriendStealPlantBlacklistStrategy = [1, 2].includes(Number(next.autoFarmFriendStealPlantBlacklistStrategy))
     ? Number(next.autoFarmFriendStealPlantBlacklistStrategy)

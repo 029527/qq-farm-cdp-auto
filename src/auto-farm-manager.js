@@ -357,7 +357,8 @@ function normalizeAutoFarmConfig(raw) {
     autoFarmPlantIntervalSec: toInt(src.autoFarmPlantIntervalSec ?? src.autoFarmOwnIntervalSec, 30, 5, 3600),
     autoFarmFriendStealIntervalSec: toInt(src.autoFarmFriendStealIntervalSec ?? src.autoFarmFriendIntervalSec, 90, 10, 3600),
     autoFarmFriendHelpIntervalSec: toInt(src.autoFarmFriendHelpIntervalSec ?? src.autoFarmFriendIntervalSec, 90, 10, 3600),
-    autoFarmMaxFriends: toInt(src.autoFarmMaxFriends, 5, 1, 50),
+    autoFarmFriendStealMaxFriends: toInt(src.autoFarmFriendStealMaxFriends ?? src.autoFarmMaxFriends, 0, 0, 50),
+    autoFarmFriendHelpMaxFriends: toInt(src.autoFarmFriendHelpMaxFriends ?? src.autoFarmMaxFriends, 5, 1, 50),
     autoFarmEnterWaitMs: toInt(src.autoFarmEnterWaitMs, 1800, 0, 15000),
     autoFarmActionWaitMs: toInt(src.autoFarmActionWaitMs, 1200, 0, 10000),
     autoFarmRpcTimeoutMs: toInt(src.autoFarmRpcTimeoutMs, 90 * 1000, 5000, 10 * 60 * 1000),
@@ -2191,7 +2192,9 @@ class AutoFarmManager {
       autoFertilizerState: this.autoFertilizerState,
       enterWaitMs: this.config.autoFarmEnterWaitMs,
       actionWaitMs: this.config.autoFarmActionWaitMs,
-      maxFriends: this.config.autoFarmMaxFriends,
+      maxFriends: taskId === "friend_steal"
+        ? this.config.autoFarmFriendStealMaxFriends
+        : (taskId === "friend_help" ? this.config.autoFarmFriendHelpMaxFriends : 0),
       refreshFriendList: this.config.autoFarmRefreshFriendList,
       returnHome: this.config.autoFarmReturnHome,
       friendHelpDailyLimit: this.config.autoFarmFriendHelpDailyLimit,
