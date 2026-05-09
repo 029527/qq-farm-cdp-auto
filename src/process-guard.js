@@ -4,7 +4,9 @@ const {
   closeWindowsByTitle,
   launchByProtocol,
   runShellCommand,
-} = require("./process-guard-windows");
+} = process.platform === "win32"
+  ? require("./process-guard-windows")
+  : require("./process-guard-macos");
 
 const PROCESS_GUARD_RESTART_EXIT_CODE = 75;
 const PROCESS_GUARD_WINDOW_MS = 10 * 60 * 1000;
@@ -400,6 +402,14 @@ class ProcessGuardManager {
         config: this.config,
         snapshot,
       }))
+      .then(() => {
+        // 重启命令已发出，重置 streak 和 phase，等待小程序重连
+        // 若小程序成功重连，noteHealthy 会再次确认；若未重连，下轮超时仍可触发重启
+        if (this.state.phase === "restarting") {
+          this.state.timeoutStreak = 0;
+          this.state.phase = this.config.enabled && !this.state.circuitOpen ? "watching" : "disabled";
+        }
+      })
       .catch((error) => {
         this.state.lastActionError = normalizeErrorMessage(error) || "未知重启错误";
         this.state.phase = this.state.circuitOpen ? "circuit_open" : "degraded";
