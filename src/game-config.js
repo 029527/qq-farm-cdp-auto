@@ -7,6 +7,7 @@ const CONFIG_ROOT = path.join(__dirname, "..", "gameConfig");
 const PLANT_IMAGE_ROOT = path.join(CONFIG_ROOT, "plant_images");
 const PLANT_MISC_IMAGE_ROOT = path.join(PLANT_IMAGE_ROOT, "stages");
 const PLANT_STAGE_IMAGE_DIR = path.join(PLANT_IMAGE_ROOT, "stages", "作物");
+const MUTATION_IMAGE_DIR = path.join(PLANT_IMAGE_ROOT, "stages", "变异");
 
 let loaded = false;
 let roleLevelConfig = [];
@@ -22,6 +23,10 @@ const externalItemNameMetaMap = new Map();
 const cropFallbackPlantMap = new Map();
 const cropFallbackSeedMap = new Map();
 const cropFallbackFruitMap = new Map();
+const mutationTypeMetaMap = new Map();
+const mutationTypeNameMetaMap = new Map();
+const mutationPlantNameMetaMap = new Map();
+const mutationPlantAssetIdMetaMap = new Map();
 
 function readJsonFile(filename, fallback) {
   const filePath = path.join(CONFIG_ROOT, filename);
@@ -192,6 +197,22 @@ function normalizeLookupText(value) {
   return String(value == null ? "" : value).trim().toLowerCase();
 }
 
+function normalizeMutationPlantAssetId(value) {
+  const raw = Number(value) || 0;
+  if (raw <= 0) return 0;
+  const text = String(Math.trunc(raw));
+  const direct = Number(text);
+  if (direct >= 1000000) {
+    const suffix = Number(text.slice(-4));
+    return suffix > 0 ? suffix : direct;
+  }
+  if (direct >= 10000) {
+    const suffix = Number(text.slice(-4));
+    return suffix > 0 ? suffix : direct;
+  }
+  return direct;
+}
+
 function collectLookupNames(...values) {
   const seen = new Set();
   const result = [];
@@ -236,6 +257,10 @@ function ensureLoaded() {
   cropFallbackPlantMap.clear();
   cropFallbackSeedMap.clear();
   cropFallbackFruitMap.clear();
+  mutationTypeMetaMap.clear();
+  mutationTypeNameMetaMap.clear();
+  mutationPlantNameMetaMap.clear();
+  mutationPlantAssetIdMetaMap.clear();
 
   const plantByName = new Map();
 
@@ -432,7 +457,139 @@ function ensureLoaded() {
       });
   }
 
+  loadMutationMapping();
+
   loaded = true;
+}
+
+function buildMutationLocalPath(localPath) {
+  const text = normalizeOptionalText(localPath);
+  if (!text) return null;
+  const candidate = path.join(MUTATION_IMAGE_DIR, ...text.split(/[\\/]+/).filter(Boolean));
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function upsertMutationPlantMeta(name, item) {
+  const plantName = normalizeOptionalText(name);
+  if (!plantName || !item || typeof item !== "object") return;
+  const current = mutationPlantNameMetaMap.get(normalizeLookupText(plantName)) || {};
+  const localPath = buildMutationLocalPath(item.local_path);
+  const imageRole = String(item.image_role || "").trim();
+  const phaseIndex = Number(item.phase_index) || 0;
+  const phaseLabel = normalizeOptionalText(item.phase_label);
+  const stageEntries = Array.isArray(current.stageEntries) ? current.stageEntries.slice() : [];
+  if (localPath && imageRole === "phase" && phaseIndex > 0) {
+    const existingIndex = stageEntries.findIndex((entry) => Number(entry && entry.index) === phaseIndex);
+    const nextEntry = { index: phaseIndex, label: phaseLabel || "", path: localPath };
+    if (existingIndex >= 0) stageEntries[existingIndex] = nextEntry;
+    else stageEntries.push(nextEntry);
+    stageEntries.sort((a, b) => (Number(a.index) || 0) - (Number(b.index) || 0));
+  }
+  const isMain = imageRole === "main" || !current.imagePath;
+  const meta = {
+    name: plantName,
+    groupName: normalizeOptionalText(item.group_name) || current.groupName || null,
+    sectionName: normalizeOptionalText(item.section_name) || current.sectionName || null,
+    itemChips: normalizeOptionalText(item.item_chips) || current.itemChips || null,
+    itemDesc: normalizeOptionalText(item.item_desc) || current.itemDesc || null,
+    itemStats: normalizeOptionalText(item.item_stats) || current.itemStats || null,
+    imagePath: isMain ? (localPath || current.imagePath || normalizeOptionalText(item.image_url) || null) : (current.imagePath || localPath || null),
+    stageEntries,
+  };
+  mutationPlantNameMetaMap.set(normalizeLookupText(plantName), meta);
+
+  const imagePath = normalizeOptionalText(item.image_path);
+  const assetMatch = imagePath && /Crop_(\d+)(?:_|\.)/i.exec(imagePath);
+  const assetId = assetMatch ? Number(assetMatch[1]) || 0 : 0;
+  if (assetId > 0 && imageRole === "main") {
+    const toneKey = /^黄金·/.test(plantName) ? "gold" : "normal";
+    mutationPlantAssetIdMetaMap.set(`${toneKey}:${assetId}`, meta);
+    if (!mutationPlantAssetIdMetaMap.has(assetId)) mutationPlantAssetIdMetaMap.set(assetId, meta);
+  }
+}
+
+function loadMutationMapping() {
+  const mappingPath = path.join(MUTATION_IMAGE_DIR, "mutation_mapping.json");
+  if (!fs.existsSync(mappingPath)) return;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(mappingPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch (_) {
+    parsed = null;
+  }
+  const items = Array.isArray(parsed && parsed.items) ? parsed.items : [];
+  items.forEach((item) => {
+    const sectionName = normalizeOptionalText(item && item.section_name);
+    const itemName = normalizeOptionalText(item && item.item_name);
+    if (!sectionName || !itemName) return;
+    if (sectionName === "变异宝典" && String(item && item.image_role || "") === "effect_icon") {
+      const mutationType = Number(item && item.article_index) || 0;
+      const meta = {
+        id: mutationType,
+        name: itemName,
+        itemChips: normalizeOptionalText(item.item_chips),
+        itemDesc: normalizeOptionalText(item.item_desc),
+        iconPath: buildMutationLocalPath(item.local_path) || normalizeOptionalText(item.image_url),
+      };
+      if (mutationType > 0) mutationTypeMetaMap.set(mutationType, meta);
+      mutationTypeNameMetaMap.set(normalizeLookupText(itemName), meta);
+      return;
+    }
+    if (sectionName === "超变图鉴") {
+      upsertMutationPlantMeta(itemName, item);
+    }
+  });
+}
+
+function getMutationTypeMeta(typeIdOrName) {
+  ensureLoaded();
+  const typeId = Number(typeIdOrName) || 0;
+  if (typeId > 0 && mutationTypeMetaMap.has(typeId)) return mutationTypeMetaMap.get(typeId);
+  const normalizedName = normalizeLookupText(typeIdOrName);
+  return normalizedName ? (mutationTypeNameMetaMap.get(normalizedName) || null) : null;
+}
+
+function getMutationPlantMetaByName(name) {
+  ensureLoaded();
+  const normalizedName = normalizeLookupText(name);
+  return normalizedName ? (mutationPlantNameMetaMap.get(normalizedName) || null) : null;
+}
+
+function getMutationPlantMetaByRuntimeId(runtimeId, options = {}) {
+  ensureLoaded();
+  const assetId = normalizeMutationPlantAssetId(runtimeId);
+  const runtimeText = String(Math.trunc(Number(runtimeId) || 0));
+  const toneKey = runtimeText.indexOf("112") === 0 ? "gold" : (runtimeText.indexOf("102") === 0 ? "normal" : "");
+  if (assetId > 0 && toneKey && mutationPlantAssetIdMetaMap.has(`${toneKey}:${assetId}`)) {
+    return mutationPlantAssetIdMetaMap.get(`${toneKey}:${assetId}`);
+  }
+  if (assetId > 0 && mutationPlantAssetIdMetaMap.has(assetId)) {
+    return mutationPlantAssetIdMetaMap.get(assetId);
+  }
+  const typeMeta = getMutationTypeMeta(options.typeId);
+  const baseName = normalizeOptionalText(options.basePlantName);
+  if (typeMeta && typeMeta.name === "黄金" && baseName) {
+    const byName = getMutationPlantMetaByName(`黄金·${baseName}`);
+    if (byName) return byName;
+  }
+  return null;
+}
+
+function getMutationTypeIconPath(typeIdOrName) {
+  const meta = getMutationTypeMeta(typeIdOrName);
+  return meta && meta.iconPath ? meta.iconPath : null;
+}
+
+function getMutationPlantImagePath(runtimeId, options = {}) {
+  const meta = getMutationPlantMetaByRuntimeId(runtimeId, options)
+    || getMutationPlantMetaByName(options.name || options.plantName);
+  const stageEntries = meta && Array.isArray(meta.stageEntries) ? meta.stageEntries : [];
+  const currentStage = Number(options.currentStage);
+  if (Number.isFinite(currentStage) && currentStage > 0) {
+    const matchedByIndex = stageEntries.find((entry) => Number(entry && entry.index) === currentStage);
+    if (matchedByIndex && matchedByIndex.path) return matchedByIndex.path;
+  }
+  return meta && meta.imagePath ? meta.imagePath : null;
 }
 
 function parseGrowPhases(growPhases) {
@@ -656,6 +813,10 @@ module.exports = {
   getItemInfoById,
   getExternalItemMetaByItemId,
   getExternalItemImagePathByItemId,
+  getMutationTypeMeta,
+  getMutationTypeIconPath,
+  getMutationPlantMetaByRuntimeId,
+  getMutationPlantImagePath,
   getAllItemInfo,
   getSeedPrice,
   getFruitPrice,

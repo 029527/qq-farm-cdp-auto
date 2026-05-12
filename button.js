@@ -3885,6 +3885,41 @@
     };
   }
 
+  function normalizeRuntimeNumberList(value) {
+    const arr = Array.isArray(value) ? value : (value == null ? [] : [value]);
+    const outArr = [];
+    const seen = new Set();
+    for (let i = 0; i < arr.length; i += 1) {
+      const n = Number(arr[i]);
+      if (!Number.isFinite(n) || seen.has(n)) continue;
+      seen.add(n);
+      outArr.push(n);
+    }
+    return outArr;
+  }
+
+  function getPlantMutationSummary(stage) {
+    const plantData = stage && stage.plantData && typeof stage.plantData === 'object'
+      ? stage.plantData
+      : null;
+    const mutantTypes = normalizeRuntimeNumberList(plantData && plantData.mutantType);
+    const startedMutantIds = normalizeRuntimeNumberList(plantData && plantData.startedMutantIds);
+    const lastHarvestMutantTypes = normalizeRuntimeNumberList(plantData && plantData.lastHarvestMutantTypes);
+    const mutantPlantIds = normalizeRuntimeNumberList(plantData && plantData.mutant_plantIds);
+    const startedMutantPlantIds = normalizeRuntimeNumberList(plantData && plantData.startedMutantPlantIds);
+    const activeMutantTypes = normalizeRuntimeNumberList([].concat(mutantTypes, startedMutantIds, lastHarvestMutantTypes));
+    const activeMutantPlantIds = normalizeRuntimeNumberList([].concat(mutantPlantIds, startedMutantPlantIds));
+    return {
+      mutantTypes,
+      startedMutantIds,
+      lastHarvestMutantTypes,
+      mutantPlantIds,
+      startedMutantPlantIds,
+      activeMutantTypes,
+      activeMutantPlantIds
+    };
+  }
+
   function getGridState(pathOrNode, opts) {
     opts = opts || {};
     const node = toNode(pathOrNode);
@@ -3902,6 +3937,7 @@
     const landCellData = safeReadKey(gridComp, 'landCellData');
     const stage = getPlantStageSummary(plantRuntime);
     const timing = getMatureTimingSummary(stage);
+    const mutation = getPlantMutationSummary(stage);
     const directPlantNode = getPlantNodeByGrid(node);
     const plantNode = directPlantNode ? fullPath(directPlantNode) : (coverRuntime ? coverRuntime.plantNode : null);
     const hasDirectPlant = !!directPlantRuntime;
@@ -4026,6 +4062,7 @@
       landSize: Number(safeReadKey(landRuntime, 'land_size')) || 1,
       leftFruit: stage && stage.plantData ? stage.plantData.left_fruit_num : null,
       fruitNum: stage && stage.plantData ? stage.plantData.fruit_num : null,
+      mutation: mutation,
       raw: plantRuntime
     };
     if (opts.includeRawLandRuntime) {
@@ -4119,7 +4156,8 @@
             couldUnlock: s.couldUnlock,
             landSize: s.landSize,
             leftFruit: s.leftFruit,
-            fruitNum: s.fruitNum
+            fruitNum: s.fruitNum,
+            mutation: s.mutation
           };
           if (includeRawGrid) entry.raw = s.raw;
           if (opts.includeRawLandRuntime && s.rawLandRuntime) entry.rawLandRuntime = s.rawLandRuntime;

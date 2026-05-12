@@ -1896,6 +1896,55 @@
       margin-top: 12px;
     }
 
+    .land-mutation-state {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      margin-top: 6px;
+      line-height: 1;
+    }
+
+    .land-mutation-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(193, 138, 28, 0.2);
+      background: rgba(255, 248, 225, 0.9);
+      color: #7a5810;
+      font-size: 0.68rem;
+      font-weight: 800;
+    }
+
+    .land-mutation-type img {
+      width: 14px;
+      height: 14px;
+      object-fit: contain;
+      display: block;
+    }
+
+    .land-mutation-predict {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: rgba(79, 138, 60, 0.08);
+      color: var(--accent-strong);
+      font-size: 0.68rem;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .land-card-actions {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8496,6 +8545,52 @@
         ].join("");
       }
 
+      function renderLandMutationState(item) {
+        var mutation = item && item.mutation && typeof item.mutation === "object" ? item.mutation : null;
+        if (!mutation || !mutation.hasMutation) return "";
+        var typeItems = Array.isArray(mutation.typeItems) ? mutation.typeItems : [];
+        var plantItems = Array.isArray(mutation.plantItems) ? mutation.plantItems : [];
+        var seenTypes = {};
+        var typeHtml = typeItems.map(function (entry) {
+          var typeName = entry && entry.name ? String(entry.name) : "变异";
+          if (seenTypes[typeName]) return "";
+          seenTypes[typeName] = true;
+          var icon = entry && entry.iconUrl
+            ? '<img src="' + escapeHtml(entry.iconUrl) + '" alt="' + escapeHtml(typeName) + '" loading="lazy" />'
+            : "";
+          return '<span class="land-mutation-type">' + icon + '<span>' + escapeHtml(typeName) + '</span></span>';
+        }).join("");
+        var predictedNames = plantItems.map(function (entry) {
+          return entry && entry.name ? String(entry.name) : "";
+        }).filter(Boolean);
+        var predictionText = String(mutation.displayPredictionText || mutation.predictionText || "").trim();
+        var effectText = String(mutation.effectText || "").trim();
+        var predictedText = predictionText
+          ? ("预测 " + predictionText)
+          : (predictedNames.length
+            ? ("预测 " + predictedNames.join("、"))
+            : (effectText ? ("效果 " + effectText) : ""));
+        if (!typeHtml && !predictedText) {
+          typeHtml = '<span class="land-mutation-type"><span>变异</span></span>';
+        }
+        return [
+          '<div class="land-mutation-state">',
+          typeHtml,
+          predictedText ? '<span class="land-mutation-predict" title="' + escapeHtml(predictedText) + '">' + escapeHtml(predictedText) + '</span>' : "",
+          '</div>'
+        ].join("");
+      }
+
+      function getLandCardImageUrl(item) {
+        return String(item && item.imageUrl || "");
+      }
+
+      function getLandCardPlantName(item) {
+        if (!item) return "空地";
+        if (item.displayPlantName) return String(item.displayPlantName);
+        return String(item.plantName || "空地");
+      }
+
       function findLandDetailById(landId) {
         if (!landState || !Array.isArray(landState.lands)) return null;
         var targetLandId = Number(landId) || 0;
@@ -8598,6 +8693,7 @@
           if (summary.empty != null) summaryParts.push("空地 " + summary.empty);
           if (summary.dead != null) summaryParts.push("枯萎 " + summary.dead);
           if (summary.multiSeason) summaryParts.push("多季作物 " + summary.multiSeason);
+          if (summary.mutated) summaryParts.push("变异 " + summary.mutated);
           if (data && data.updatedAt) summaryParts.push("刷新于 " + formatClockTime(data.updatedAt));
           txtLandSummary.textContent = summaryParts.join(" · ");
         }
@@ -8608,6 +8704,7 @@
             buildLandChip("生长：" + (summary.growing || 0), "good"),
             buildLandChip("空闲：" + (summary.empty || 0)),
             buildLandChip("枯萎：" + (summary.dead || 0), "bad"),
+            buildLandChip("变异：" + (summary.mutated || 0), summary.mutated ? "warn" : ""),
             buildLandChip("待浇水：" + (summary.needWater || 0), "warn"),
             buildLandChip("待除草/虫：" + ((summary.needWeed || 0) + (summary.needBug || 0)), "warn"),
             buildLandChip("1小时内成熟：" + (summary.matureSoon || 0))
@@ -8620,6 +8717,7 @@
           } else {
             landDetailGrid.innerHTML = lands.map(function (item) {
               var statusTone = item.status === "mature" ? "good" : (item.status === "dead" ? "bad" : "");
+              var landImageUrl = getLandCardImageUrl(item);
               var tags = [];
               if (item.occupiedByMultiTilePlant) tags.push('<span class="land-mini-tag">2x2占地</span>');
               if (item.needWater) tags.push('<span class="land-mini-tag warn">待浇水</span>');
@@ -8632,14 +8730,15 @@
                 '<span class="' + getLandBadgeClass(item.landType) + '">' + escapeHtml(item.landTypeLabel || "待识别土地") + '</span>',
                 "</div>",
                 '<div class="land-card-image">' + (
-                  item.imageUrl
-                    ? ('<img src="' + escapeHtml(item.imageUrl) + '" alt="' + escapeHtml(item.plantName || "作物") + '" loading="lazy" />')
+                  landImageUrl
+                    ? ('<img src="' + escapeHtml(landImageUrl) + '" alt="' + escapeHtml(getLandCardPlantName(item) || "作物") + '" loading="lazy" />')
                     : '<span style="color:var(--muted);font-size:0.82rem">暂无图片</span>'
                 ) + "</div>",
-                '<p class="land-card-name">' + escapeHtml(item.plantName || "空地") + "</p>",
+                '<p class="land-card-name">' + escapeHtml(getLandCardPlantName(item)) + "</p>",
                 '<p class="land-card-status' + (statusTone ? " " + statusTone : "") + '">' +
                   escapeHtml(item.matureEtaText || item.statusLabel || "--") +
                 "</p>",
+                renderLandMutationState(item),
                 '<div class="land-card-meta">',
                 (item.landLevel != null ? ('<span>Lv.' + escapeHtml(item.landLevel) + '</span>') : ""),
                 '<span>' + escapeHtml(formatLandPhaseText(item)) + "</span>",

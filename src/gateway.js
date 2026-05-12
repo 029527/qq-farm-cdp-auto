@@ -42,6 +42,10 @@ const {
   getItemInfoById,
   getExternalItemMetaByItemId,
   getExternalItemImagePathByItemId,
+  getMutationTypeMeta,
+  getMutationTypeIconPath,
+  getMutationPlantMetaByRuntimeId,
+  getMutationPlantImagePath,
   getLevelExpProgress,
   getPlantGrowTimeSec,
   getPlantStageImagePathBySeedId,
@@ -1026,6 +1030,43 @@ function buildPlantStageImageUrl(seedId, stageOptions) {
   return `/api/plant-image?${params.toString()}`;
 }
 
+function buildMutationIconUrl(typeIdOrName) {
+  const params = new URLSearchParams();
+  const typeId = Number(typeIdOrName) || 0;
+  if (typeId > 0) params.set("typeId", String(typeId));
+  else {
+    const name = String(typeIdOrName || "").trim();
+    if (name) params.set("name", name);
+  }
+  return params.toString() ? `/api/mutation-icon?${params.toString()}` : null;
+}
+
+function buildMutationPlantImageUrl(runtimeId, options = {}) {
+  const params = new URLSearchParams();
+  const id = Number(runtimeId) || 0;
+  if (id > 0) params.set("id", String(id));
+  const typeId = Number(options.typeId) || 0;
+  if (typeId > 0) params.set("typeId", String(typeId));
+  const basePlantName = String(options.basePlantName || "").trim();
+  if (basePlantName) params.set("basePlantName", basePlantName);
+  const name = String(options.name || options.plantName || "").trim();
+  if (name) params.set("name", name);
+  const currentStage = Number(options.currentStage) || 0;
+  if (currentStage > 0) params.set("currentStage", String(currentStage));
+  return params.toString() ? `/api/mutation-plant-image?${params.toString()}` : null;
+}
+
+const KNOWN_MUTATION_TYPE_NAMES = ["塔塔", "哈哈", "黄金", "冰冻", "爱心", "暗化", "湿润"];
+const RUNTIME_MUTATION_TYPE_NAME_OVERRIDES = new Map([
+  [1, "冰冻"],
+  [2, "爱心"],
+  [3, "暗化"],
+  [4, "湿润"],
+  [5, "黄金"],
+  [6, "哈哈"],
+  [7, "塔塔"],
+]);
+
 function formatMatureEta(seconds) {
   const total = Math.max(0, Number(seconds) || 0);
   const hours = Math.floor(total / 3600);
@@ -1058,6 +1099,7 @@ function summarizeLandCounts(lands) {
     needBug: 0,
     matureSoon: 0,
     multiSeason: 0,
+    mutated: 0,
   };
   list.forEach((item) => {
     const status = String(item && item.status || "");
@@ -1068,6 +1110,7 @@ function summarizeLandCounts(lands) {
     if (item && item.needWater) summary.needWater += 1;
     if (item && item.needWeed) summary.needWeed += 1;
     if (item && item.needBug) summary.needBug += 1;
+    if (item && item.hasMutation) summary.mutated += 1;
     if ((Number(item && item.totalSeason) || 0) > 1) summary.multiSeason += 1;
     const matureInSec = Number(item && item.matureInSec);
     if (Number.isFinite(matureInSec) && matureInSec > 0 && matureInSec <= 3600) {
@@ -1075,6 +1118,276 @@ function summarizeLandCounts(lands) {
     }
   });
   return summary;
+}
+
+function toNumberList(value) {
+  const arr = Array.isArray(value) ? value : (value == null ? [] : [value]);
+  const out = [];
+  const seen = new Set();
+  arr.forEach((item) => {
+    const n = Number(item);
+    if (!Number.isFinite(n) || seen.has(n)) return;
+    seen.add(n);
+    out.push(n);
+  });
+  return out;
+}
+
+function mergeNumberLists(...values) {
+  return toNumberList(values.reduce((acc, value) => acc.concat(toNumberList(value)), []));
+}
+
+function getStageMutantTypes(stageMutants) {
+  const list = Array.isArray(stageMutants) ? stageMutants : [];
+  return mergeNumberLists(list.map((item) => {
+    if (item == null) return 0;
+    if (typeof item === "number" || typeof item === "string") return item;
+    if (typeof item !== "object") return 0;
+    return item.typeId || item.mutantType || item.mutantId || item.id || item.type || 0;
+  }));
+}
+
+function parseMutationPlantMap(value) {
+  const map = new Map();
+  String(value || "").split(";").forEach((part) => {
+    const pieces = String(part || "").split(":");
+    const typeId = Number(pieces[0]) || 0;
+    const plantId = Number(pieces[1]) || 0;
+    if (typeId > 0 && plantId > 0 && !map.has(typeId)) map.set(typeId, plantId);
+  });
+  return map;
+}
+
+function parseMutationOutputName(meta) {
+  const chips = String(meta && meta.itemChips || "");
+  const parts = chips.split("|").map((item) => item.trim()).filter(Boolean);
+  return parts.length >= 2 && parts[0] === "产出" ? parts[1] : null;
+}
+
+function parseMutationEffectText(meta) {
+  const chips = String(meta && meta.itemChips || "");
+  const parts = chips.split("|").map((item) => item.trim()).filter(Boolean);
+  if (parts.length >= 2 && parts[0] !== "产出") return `${parts[0]} ${parts[1]}`;
+  return null;
+}
+
+function getRuntimeMutationTypeMeta(typeId) {
+  const id = Number(typeId) || 0;
+  const overrideName = id > 0 ? RUNTIME_MUTATION_TYPE_NAME_OVERRIDES.get(id) : null;
+  if (overrideName) return getMutationTypeMeta(overrideName) || { id, name: overrideName };
+  return getMutationTypeMeta(id);
+}
+
+function inferMutationTypeMeta(typeId) {
+  const directMeta = getRuntimeMutationTypeMeta(typeId);
+  if (directMeta && directMeta.name) return directMeta;
+  return {};
+}
+
+function getMutationDisplayOrder(name) {
+  const order = ["塔塔", "哈哈", "黄金", "冰冻", "爱心", "暗化", "湿润"];
+  const index = order.indexOf(String(name || ""));
+  return index >= 0 ? index : order.length;
+}
+
+function getMutationGrowthPlantName(typeName, outputName) {
+  const name = String(typeName || "").trim();
+  if (name === "塔塔") return "哈哈南瓜塔";
+  return String(outputName || "").trim();
+}
+
+function hasMutationPlantImage(runtimeId, options) {
+  return !!getMutationPlantImagePath(runtimeId || 0, options || {});
+}
+
+function normalizeObservedMutationTypeNames(value) {
+  const list = Array.isArray(value) ? value : (value == null ? [] : [value]);
+  const seen = new Set();
+  const result = [];
+  list.forEach((item) => {
+    const text = String(item == null ? "" : item).trim();
+    if (!text || seen.has(text) || !KNOWN_MUTATION_TYPE_NAMES.includes(text)) return;
+    seen.add(text);
+    result.push(text);
+  });
+  result.sort((a, b) => getMutationDisplayOrder(a) - getMutationDisplayOrder(b));
+  return result;
+}
+
+function buildMutationTypeItem(typeName, typeId = 0) {
+  const meta = getMutationTypeMeta(typeName) || {};
+  const name = meta.name || typeName || `变异 ${typeId}`;
+  return {
+    typeId: Number(typeId) || Number(meta.id) || 0,
+    name,
+    itemChips: meta.itemChips || null,
+    itemDesc: meta.itemDesc || null,
+    effectText: parseMutationEffectText(meta),
+    iconUrl: getMutationTypeIconPath(name) ? buildMutationIconUrl(name) : null,
+  };
+}
+
+function pickLandMutationDisplayPlant(mutation, options = {}) {
+  if (!mutation || !mutation.hasMutation) return null;
+  const currentStage = Number(options.currentStage) || 0;
+  const basePlantName = String(options.basePlantName || "").trim();
+  const typeItems = Array.isArray(mutation.typeItems) ? mutation.typeItems : [];
+  const plantItems = Array.isArray(mutation.plantItems) ? mutation.plantItems : [];
+  const predictionItems = Array.isArray(mutation.predictionItems) ? mutation.predictionItems : [];
+  const hasGold = typeItems.some((item) => String(item && item.name || "") === "黄金")
+    || plantItems.some((item) => /^黄金·/.test(String(item && item.name || "")));
+
+  if (hasGold) {
+    const candidates = [];
+    predictionItems.forEach((item) => {
+      if (!item || item.typeName === "黄金") return;
+      const growthName = getMutationGrowthPlantName(item.typeName, item.outputName);
+      if (growthName) candidates.push(`黄金·${growthName}`);
+      if (item.outputName && item.outputName !== growthName) candidates.push(`黄金·${item.outputName}`);
+    });
+    plantItems.forEach((item) => {
+      const name = String(item && item.name || "").trim();
+      if (name && !/^黄金·/.test(name)) candidates.push(`黄金·${name}`);
+    });
+    if (basePlantName) candidates.push(`黄金·${basePlantName}`);
+    const seen = new Set();
+    for (const name of candidates) {
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const imageOptions = { name, currentStage };
+      if (hasMutationPlantImage(0, imageOptions)) return { runtimeId: 0, typeId: 0, name };
+    }
+  }
+
+  for (const item of plantItems) {
+    const runtimeId = Number(item && item.runtimeId) || 0;
+    const typeId = Number(item && item.typeId) || 0;
+    const name = String(item && item.name || "").trim();
+    const imageOptions = { typeId, basePlantName, name, currentStage };
+    if (hasMutationPlantImage(runtimeId, imageOptions)) return { runtimeId, typeId, name };
+  }
+
+  for (const item of predictionItems) {
+    const name = getMutationGrowthPlantName(item && item.typeName, item && item.outputName);
+    if (name && hasMutationPlantImage(0, { name, currentStage })) return { runtimeId: 0, typeId: 0, name };
+  }
+  return null;
+}
+
+function normalizeLandMutation(rawMutation, plantName, plantConfig) {
+  const src = rawMutation && typeof rawMutation === "object" ? rawMutation : {};
+  const stageMutants = Array.isArray(src.stageMutants) ? src.stageMutants : [];
+  const observedTypeNames = normalizeObservedMutationTypeNames(src.observedTypeNames);
+  const activeTypes = mergeNumberLists(
+    src.activeMutantTypes,
+    src.mutantTypes,
+    src.startedMutantIds,
+    src.lastHarvestMutantTypes,
+    getStageMutantTypes(stageMutants)
+  );
+  const activePlantIds = mergeNumberLists(
+    src.activeMutantPlantIds,
+    src.mutantPlantIds,
+    src.startedMutantPlantIds
+  );
+  const config = plantConfig && typeof plantConfig === "object" ? plantConfig : {};
+  const effectPlantMap = parseMutationPlantMap(config.mutant_effect_plant);
+  const recordKeys = new Set();
+  const records = activeTypes.map((typeId, index) => {
+    const runtimePlantId = effectPlantMap.get(typeId) || activePlantIds[index] || 0;
+    const plantMeta = getMutationPlantMetaByRuntimeId(runtimePlantId, { typeId, basePlantName: plantName }) || {};
+    const typeMeta = inferMutationTypeMeta(typeId);
+    recordKeys.add(`${typeId}:${runtimePlantId}`);
+    if (runtimePlantId) recordKeys.add(`plant:${runtimePlantId}`);
+    return { typeId, runtimePlantId, typeMeta, plantMeta };
+  });
+  activePlantIds.forEach((runtimePlantId) => {
+    if (!runtimePlantId || recordKeys.has(`plant:${runtimePlantId}`)) return;
+    const plantMeta = getMutationPlantMetaByRuntimeId(runtimePlantId, { basePlantName: plantName }) || {};
+    if (!plantMeta.name) return;
+    const typeMeta = inferMutationTypeMeta(0);
+    records.push({ typeId: 0, runtimePlantId, typeMeta, plantMeta });
+  });
+  records.sort((a, b) => getMutationDisplayOrder(a.typeMeta && a.typeMeta.name) - getMutationDisplayOrder(b.typeMeta && b.typeMeta.name));
+  const seenTypeNames = new Set();
+  let typeItems = records.map((record) => {
+    const meta = record.typeMeta || {};
+    if (!meta.name) return null;
+    const name = meta.name || `变异 ${record.typeId}`;
+    const displayTypeId = Number(meta.id) || record.typeId;
+    const typeKey = name || String(record.typeId);
+    if (seenTypeNames.has(typeKey)) return null;
+    seenTypeNames.add(typeKey);
+    return {
+      typeId: displayTypeId,
+      name,
+      itemChips: meta.itemChips || null,
+      itemDesc: meta.itemDesc || null,
+      effectText: parseMutationEffectText(meta),
+      iconUrl: getMutationTypeIconPath(meta.name || record.typeId) ? buildMutationIconUrl(meta.name || record.typeId) : null,
+    };
+  }).filter(Boolean);
+  observedTypeNames.forEach((typeName) => {
+    if (seenTypeNames.has(typeName)) return;
+    seenTypeNames.add(typeName);
+    typeItems.push(buildMutationTypeItem(typeName));
+  });
+  typeItems.sort((a, b) => getMutationDisplayOrder(a && a.name) - getMutationDisplayOrder(b && b.name));
+  const seenPlantNames = new Set();
+  const plantItems = records
+    .filter((record) => Number(record.runtimePlantId) > 0)
+    .map((record) => {
+      const runtimeId = record.runtimePlantId;
+      const meta = record.plantMeta || {};
+      const name = meta.name || `变异作物 ${runtimeId}`;
+      const displayTypeId = Number(record.typeMeta && record.typeMeta.id) || record.typeId;
+      const plantKey = name || String(runtimeId);
+      if (seenPlantNames.has(plantKey)) return null;
+      seenPlantNames.add(plantKey);
+      return {
+        runtimeId,
+        typeId: displayTypeId,
+        name,
+        groupName: meta.groupName || null,
+        itemChips: meta.itemChips || null,
+        itemDesc: meta.itemDesc || null,
+        itemStats: meta.itemStats || null,
+        imageUrl: getMutationPlantImagePath(runtimeId, { typeId: record.typeId, basePlantName: plantName })
+          ? buildMutationPlantImageUrl(runtimeId, { typeId: record.typeId, basePlantName: plantName })
+          : null,
+      };
+    })
+    .filter(Boolean);
+  const predictionItems = typeItems.map((item, index) => {
+    const outputName = parseMutationOutputName(item) || (plantItems[index] && plantItems[index].name) || "";
+    return {
+      typeId: item.typeId,
+      typeName: item.name,
+      outputName,
+    };
+  }).filter((item) => item.outputName);
+  const effectItems = typeItems.map((item) => ({
+    typeId: item.typeId,
+    typeName: item.name,
+    effectText: item.effectText || null,
+  })).filter((item) => item.effectText);
+  const hasMutation = src.hasMutation === true || activeTypes.length > 0 || activePlantIds.length > 0 || stageMutants.length > 0 || observedTypeNames.length > 0;
+  return {
+    hasMutation,
+    activeTypes,
+    activePlantIds,
+    typeItems,
+    plantItems,
+    predictionItems,
+    predictionText: predictionItems.map((item) => item.outputName).join("、"),
+    effectItems,
+    effectText: effectItems.map((item) => item.effectText).join("、"),
+    startedMutantIds: toNumberList(src.startedMutantIds),
+    startedMutantPlantIds: toNumberList(src.startedMutantPlantIds),
+    lastHarvestMutantTypes: toNumberList(src.lastHarvestMutantTypes),
+    observedTypeNames,
+    stageMutants,
+  };
 }
 
 function enrichAnalyticsRowForUi(item) {
@@ -1404,6 +1717,29 @@ function normalizeLandDetail(raw, index) {
   const fruitNum = Number(item.fruitNum) || Number(plantData && plantData.fruit_num) || 0;
   const leftFruit = Number(item.leftFruit) || Number(plantData && plantData.left_fruit_num) || 0;
   const outputScore = fruitNum > 0 ? fruitNum : Math.max(leftFruit, 0);
+  const rawMutation = item.mutation && typeof item.mutation === "object"
+    ? { ...item.mutation, observedTypeNames: item.inspectedMutationTypeNames || item.observedMutationTypeNames || null }
+    : item.mutation;
+  const mutation = normalizeLandMutation(rawMutation, plantName, runtime && runtime.config);
+  const currentStage = Number(item.currentStage) || null;
+  const mutationDisplayPlant = pickLandMutationDisplayPlant(mutation, {
+    basePlantName: plantName,
+    currentStage,
+  });
+  const mutationImageUrl = mutationDisplayPlant
+    ? buildMutationPlantImageUrl(mutationDisplayPlant.runtimeId, {
+      typeId: mutationDisplayPlant.typeId,
+      basePlantName: plantName,
+      name: mutationDisplayPlant.name,
+      currentStage,
+    })
+    : null;
+  const displayPlantName = mutationDisplayPlant && mutationDisplayPlant.name
+    ? mutationDisplayPlant.name
+    : plantName;
+  if (mutationDisplayPlant && mutationDisplayPlant.name) {
+    mutation.displayPredictionText = mutationDisplayPlant.name;
+  }
   const inspectedLandType = item.inspectedLandType || null;
   const runtimeLandType = typeof item.landType === "string" && item.landType ? item.landType : null;
   const rawLandType = runtimeLandType || inspectedLandType || null;
@@ -1431,10 +1767,12 @@ function normalizeLandDetail(raw, index) {
     statusLabel: getLandStatusLabel(status),
     plantId: plantId > 0 ? plantId : null,
     plantName: hasPlant ? plantName : null,
+    originalPlantName: hasPlant ? plantName : null,
+    displayPlantName: hasPlant ? displayPlantName : null,
     seedId: seedId > 0 ? seedId : null,
-    imageUrl: buildPlantStageImageUrl(seedId, {
+    imageUrl: mutationImageUrl || buildPlantStageImageUrl(seedId, {
       plantName: plantName || null,
-      currentStage: Number(item.currentStage) || null,
+      currentStage,
       phaseName: item.phaseName || null,
     }),
     hasPlant,
@@ -1445,7 +1783,7 @@ function normalizeLandDetail(raw, index) {
     occupancyAnchorPath: item.occupancyAnchorPath || null,
     occupancyPlantSize: Number(item.plantSize) || Number(plantConfig && plantConfig.size) || 1,
     phaseName: item.phaseName || null,
-    currentStage: Number(item.currentStage) || null,
+    currentStage,
     totalStages: Number(item.totalStages) || null,
     currentSeason,
     totalSeason,
@@ -1466,6 +1804,9 @@ function normalizeLandDetail(raw, index) {
     leftFruit,
     fruitNum,
     outputScore,
+    hasMutation: mutation.hasMutation,
+    mutation,
+    mutationDisplayPlant,
     canHarvest: !!item.canHarvest,
     canSteal: !!item.canSteal,
     canCollect: !!item.canCollect,
@@ -1528,6 +1869,27 @@ function assessLandTypeInspection(inspection, expectedLandId) {
   };
 }
 
+function detectMutationTypeNamesFromTexts(...values) {
+  const texts = [];
+  values.forEach((value) => {
+    if (Array.isArray(value)) texts.push(...value);
+    else if (value != null) texts.push(value);
+  });
+  return normalizeObservedMutationTypeNames(texts.map((text) => String(text || "").trim()));
+}
+
+function extractInspectedMutationTypeNames(inspection) {
+  const cur = inspection && typeof inspection === "object" ? inspection : null;
+  if (!cur) return [];
+  return detectMutationTypeNamesFromTexts(
+    cur.detailTexts,
+    cur.rootTexts,
+    cur.benefitTexts,
+    cur.landLabelTexts,
+    cur.levelTipTexts,
+  );
+}
+
 async function fetchLandDetailsForUi({ ensureAutomationSession, ensureAutomationGameCtl, callAutomationGameCtl }) {
   const cached = getUiReadCache("lands:default");
   if (cached) return cached;
@@ -1541,9 +1903,28 @@ async function fetchLandDetailsForUi({ ensureAutomationSession, ensureAutomation
     silent: true,
   }]);
   const grids = Array.isArray(status && status.grids) ? status.grids : [];
+  const inspectedMutationByLandId = new Map();
+  const mutatedGrids = grids.filter((item) => item && item.landId != null && item.mutation && item.mutation.hasMutation);
+  for (const item of mutatedGrids) {
+    try {
+      const inspection = await callAutomationGameCtl(session, "gameCtl.inspectLandDetail", [{
+        landId: item.landId,
+        waitAfter: 220,
+        silent: true,
+      }]);
+      const assessment = assessLandTypeInspection(inspection, item.landId);
+      const names = assessment.trusted ? extractInspectedMutationTypeNames(inspection) : [];
+      if (names.length > 0) inspectedMutationByLandId.set(Number(item.landId), names);
+    } catch (_) {
+      // Runtime mutation ids remain as a fallback when the detail panel cannot be inspected.
+    }
+  }
   const lands = grids
     .filter((item) => item && item.landId != null)
-    .map((item, index) => normalizeLandDetail(item, index))
+    .map((item, index) => normalizeLandDetail({
+      ...item,
+      inspectedMutationTypeNames: inspectedMutationByLandId.get(Number(item.landId)) || null,
+    }, index))
     .sort((a, b) => (Number(a.landId) || 0) - (Number(b.landId) || 0));
   return setUiReadCache("lands:default", UI_READ_CACHE_TTL_MS.lands, {
     farmType: status && status.farmType ? status.farmType : null,
@@ -5132,6 +5513,62 @@ function createGateway(config) {
         if (!imagePath) {
           res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ ok: false, error: "image not found" }));
+          return;
+        }
+        const ext = path.extname(imagePath).toLowerCase();
+        res.writeHead(200, {
+          "Content-Type": MIME[ext] || "application/octet-stream",
+          "Cache-Control": "public, max-age=3600",
+        });
+        fsSync.createReadStream(imagePath).pipe(res);
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && urlPath === "/api/mutation-icon") {
+      try {
+        const typeId = Number(parsedUrl.searchParams.get("typeId") || "0");
+        const name = String(parsedUrl.searchParams.get("name") || "").trim();
+        const imagePath = getMutationTypeIconPath(typeId || name);
+        if (!imagePath) {
+          res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: false, error: "mutation icon not found" }));
+          return;
+        }
+        const ext = path.extname(imagePath).toLowerCase();
+        res.writeHead(200, {
+          "Content-Type": MIME[ext] || "application/octet-stream",
+          "Cache-Control": "public, max-age=3600",
+        });
+        fsSync.createReadStream(imagePath).pipe(res);
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && urlPath === "/api/mutation-plant-image") {
+      try {
+        const id = Number(parsedUrl.searchParams.get("id") || "0");
+        const typeId = Number(parsedUrl.searchParams.get("typeId") || "0");
+        const basePlantName = String(parsedUrl.searchParams.get("basePlantName") || "").trim();
+        const name = String(parsedUrl.searchParams.get("name") || "").trim();
+        const currentStage = Number(parsedUrl.searchParams.get("currentStage") || "0") || 0;
+        const imagePath = getMutationPlantImagePath(id, {
+          typeId,
+          basePlantName: basePlantName || null,
+          name: name || null,
+          currentStage,
+        });
+        if (!imagePath) {
+          res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: false, error: "mutation plant image not found" }));
           return;
         }
         const ext = path.extname(imagePath).toLowerCase();
