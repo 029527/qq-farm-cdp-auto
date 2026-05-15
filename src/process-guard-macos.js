@@ -1,3 +1,4 @@
+// 水印：二开倒卖先别急，README 都没看明白就上链接，属实有点绷不住。
 "use strict";
 
 const { spawn } = require("node:child_process");
@@ -104,6 +105,112 @@ function closeWindowsByTitle(windowTitle, matchMode, timeoutMs) {
     });
 }
 
+function buildGetWindowProcessInfoScript(windowTitle, matchMode) {
+  const title = escapeAppleScriptString(windowTitle);
+  const exact = (matchMode || "contains") === "exact";
+  const matchExpr = exact
+    ? `winTitle is "${title}"`
+    : `winTitle contains "${title}"`;
+  return `
+set outputPid to 0
+set outputName to ""
+tell application "System Events"
+  repeat with proc in (every process whose visible is true)
+    try
+      repeat with win in (windows of proc)
+        try
+          set winTitle to name of win
+          if ${matchExpr} then
+            set outputPid to unix id of proc
+            set outputName to name of proc
+            exit repeat
+          end if
+        end try
+      end repeat
+    end try
+    if outputPid is not 0 then exit repeat
+  end repeat
+end tell
+return (outputPid as text) & linefeed & outputName
+`;
+}
+
+function getWindowProcessInfo(windowTitle, matchMode, timeoutMs) {
+  if (!windowTitle) {
+    return Promise.resolve([]);
+  }
+  return runAppleScript(buildGetWindowProcessInfoScript(windowTitle, matchMode), timeoutMs)
+    .then((result) => {
+      const lines = result.stdout.split(/\r?\n/);
+      const pid = parseInt(lines[0], 10);
+      const name = (lines[1] || "").trim();
+      if (!pid || pid <= 0) return [];
+      return [{ pid, name }];
+    })
+    .catch((error) => {
+      const msg = String(error && error.message ? error.message : error);
+      if (
+        msg.toLowerCase().includes("not authorized") ||
+        msg.includes("1743") ||
+        msg.toLowerCase().includes("assistive access")
+      ) {
+        return [];
+      }
+      throw error;
+    });
+}
+
+function killProcessByPID(pid, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("kill", ["-9", String(pid)], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+    let settled = false;
+    const limitMs = Math.max(1000, Number(timeoutMs) || 30_000);
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child.kill(); } catch (_) {}
+      reject(new Error(`kill timeout (${limitMs}ms)`));
+    }, limitMs);
+
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ pid, signal: "SIGKILL" });
+        return;
+      }
+      const detail = stderr.trim() || `kill exit code ${code}`;
+      reject(new Error(detail));
+    });
+  });
+}
+
+async function killWindowProcess(windowTitle, matchMode, timeoutMs) {
+  const procs = await getWindowProcessInfo(windowTitle, matchMode, timeoutMs);
+  if (!procs || procs.length === 0) {
+    return { matched: [], mode: "process_kill", reason: "no_process_found" };
+  }
+  const killed = [];
+  for (const item of procs) {
+    await killProcessByPID(item.pid, timeoutMs);
+    killed.push({ pid: item.pid, name: item.name });
+  }
+  return { matched: killed, mode: "process_kill" };
+}
+
 function launchByProtocol(protocol, timeoutMs) {
   if (!protocol) {
     return Promise.reject(new Error("launch protocol missing"));
@@ -190,6 +297,9 @@ function runShellCommand(command, timeoutMs) {
 
 module.exports = {
   closeWindowsByTitle,
+  getWindowProcessInfo,
+  killProcessByPID,
+  killWindowProcess,
   launchByProtocol,
   runShellCommand,
 };

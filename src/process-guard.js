@@ -1,12 +1,17 @@
 "use strict";
 
-const {
-  closeWindowsByTitle,
-  launchByProtocol,
-  runShellCommand,
-} = process.platform === "win32"
+const platformUtils = process.platform === "win32"
   ? require("./process-guard-windows")
   : require("./process-guard-macos");
+
+const {
+  closeWindowsByTitle,
+  getWindowProcessInfo,
+  launchByProtocol,
+  runShellCommand,
+} = platformUtils;
+
+const killWindowProcess = platformUtils.killWindowProcess || null;
 
 const PROCESS_GUARD_RESTART_EXIT_CODE = 75;
 const PROCESS_GUARD_WINDOW_MS = 10 * 60 * 1000;
@@ -43,7 +48,7 @@ function normalizeProcessGuardConfig(raw) {
     enabled: toBool(src.enabled, false),
     timeoutThreshold: toInt(src.timeoutThreshold, 3, 1, 20),
     monitorIntervalMs: toInt(src.monitorIntervalMs, 3000, 500, 60_000),
-    restartPauseSec: toInt(src.restartPauseSec, 15, 0, 600),
+    restartPauseSec: toInt(src.restartPauseSec, 3, 0, 600),
     maxRestartsPer10Min: toInt(src.maxRestartsPer10Min, 4, 1, 20),
     commandTimeoutMs: toInt(src.commandTimeoutMs, 30_000, 1000, 300_000),
     qqWindowTitle: toStringValue(src.qqWindowTitle, "QQ经典农场"),
@@ -137,7 +142,17 @@ async function performRuntimeRestart(config, runtimeTarget) {
   const pauseMs = settings.restartPauseSec * 1000;
 
   if (runtimeTarget === "qq_ws") {
-    const closed = await closeWindowsByTitle(settings.qqWindowTitle, settings.qqWindowMatchMode, timeoutMs);
+    let closed = null;
+    const procs = getWindowProcessInfo
+      ? await getWindowProcessInfo(settings.qqWindowTitle, settings.qqWindowMatchMode, timeoutMs)
+      : [];
+    if (procs && procs.length > 0) {
+      if (killWindowProcess) {
+        closed = await killWindowProcess(settings.qqWindowTitle, settings.qqWindowMatchMode, timeoutMs);
+      } else {
+        closed = await closeWindowsByTitle(settings.qqWindowTitle, settings.qqWindowMatchMode, timeoutMs);
+      }
+    }
     if (pauseMs > 0) {
       await delay(pauseMs);
     }
